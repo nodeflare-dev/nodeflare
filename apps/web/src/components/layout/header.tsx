@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl';
 import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { LocaleSwitcher } from '@/components/locale-switcher';
+import { FaDiscord, FaXTwitter, FaGithub } from 'react-icons/fa6';
 
 export function Header() {
   const { user, isLoading } = useAuth();
@@ -13,7 +14,7 @@ export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-sm border-b border-gray-100">
+    <header className="bg-white border-b border-gray-100">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2">
           <img src="/logo.png" alt="Nodeflare" className="h-7 sm:h-8 w-auto" />
@@ -27,6 +28,17 @@ export function Header() {
         </nav>
 
         <div className="flex items-center gap-2 sm:gap-3">
+          <div className="hidden md:flex items-center gap-3 mr-2">
+            <a href="https://discord.gg/ZqHemHHmzd" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-gray-900 transition-colors">
+              <FaDiscord className="w-5 h-5" />
+            </a>
+            <a href="https://x.com/3vvqu2dhUn36840" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-gray-900 transition-colors">
+              <FaXTwitter className="w-5 h-5" />
+            </a>
+            <a href="https://github.com/nodeflare-dev" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-gray-900 transition-colors">
+              <FaGithub className="w-5 h-5" />
+            </a>
+          </div>
           <LocaleSwitcher />
           {isLoading ? (
             <div className="w-16 sm:w-20 h-9 bg-gray-100 rounded-lg animate-pulse" />
@@ -90,6 +102,17 @@ export function Header() {
             >
               {t('blog')}
             </Link>
+            <div className="flex items-center gap-4 px-3 py-2.5">
+              <a href="https://discord.gg/ZqHemHHmzd" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-gray-900 transition-colors">
+                <FaDiscord className="w-5 h-5" />
+              </a>
+              <a href="https://x.com/3vvqu2dhUn36840" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-gray-900 transition-colors">
+                <FaXTwitter className="w-5 h-5" />
+              </a>
+              <a href="https://github.com/nodeflare-dev" target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-gray-900 transition-colors">
+                <FaGithub className="w-5 h-5" />
+              </a>
+            </div>
             {!isLoading && !user && (
               <div className="pt-3 border-t border-gray-100 mt-3">
                 <a
