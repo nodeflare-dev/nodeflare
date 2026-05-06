@@ -1,0 +1,1174 @@
+use axum::{
+    extract::{ConnectInfo, Path, Query, State},
+    http::{header::HeaderMap, StatusCode},
+    response::{IntoResponse, Redirect, Response},
+    Form, Json,
+};
+use std::net::SocketAddr;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{Duration, Utc};
+use mcp_auth::ApiKeyService;
+use mcp_common::types::WorkspaceRole;
+use mcp_db::{
+    OAuthAccessTokenRepository, OAuthAuthorizationCodeRepository, OAuthClientRepository,
+    OAuthRefreshTokenRepository, WorkspaceRepository,
+    CreateOAuthAccessToken, CreateOAuthAuthorizationCode, CreateOAuthClient,
+    CreateOAuthRefreshToken,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::sync::Arc;
+use url::Url;
+use uuid::Uuid;
+use rand::RngCore;
+
+use crate::extractors::AuthUser;
+use crate::state::AppState;
+
+// Token expiration times
+const ACCESS_TOKEN_EXPIRES_HOURS: i64 = 1;
+const REFRESH_TOKEN_EXPIRES_DAYS: i64 = 30;
+const AUTH_CODE_EXPIRES_MINUTES: i64 = 10;
+
+// ====================
+// OAuth Client Management (for workspace owners)
+// ====================
+
+#[derive(Debug, Deserialize)]
+pub struct CreateOAuthClientRequest {
+    pub client_name: String,
+    pub redirect_uris: Vec<String>,
+    #[serde(default)]
+    pub server_id: Option<Uuid>,
+    #[serde(default = "default_scopes")]
+    pub scopes: Vec<String>,
+}
+
+fn default_scopes() -> Vec<String> {
+    vec!["*".to_string()]
+}
+
+#[derive(Debug, Serialize)]
+pub struct OAuthClientResponse {
+    pub id: Uuid,
+    pub client_id: String,
+    pub client_secret: Option<String>, // Only returned on creation
+    pub client_name: String,
+    pub redirect_uris: Vec<String>,
+    pub server_id: Option<Uuid>,
+    pub scopes: Vec<String>,
+    pub created_at: String,
+}
+
+/// List OAuth clients for a workspace
+pub async fn list_clients(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<Vec<OAuthClientResponse>>, (StatusCode, String)> {
+    // Verify user is a member of this workspace
+    let _ = WorkspaceRepository::get_member(&state.db, workspace_id, auth_user.user_id)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()))?
+        .ok_or((StatusCode::FORBIDDEN, "Not a workspace member".to_string()))?;
+
+    let clients = OAuthClientRepository::list_by_workspace(&state.db, workspace_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let response: Vec<OAuthClientResponse> = clients
+        .into_iter()
+        .map(|c| {
+            let redirect_uris = c.redirect_uris();
+            let scopes = c.scopes();
+            let created_at = c.created_at.to_rfc3339();
+            OAuthClientResponse {
+                id: c.id,
+                client_id: c.client_id,
+                client_secret: None, // Never return secret after creation
+                client_name: c.client_name,
+                redirect_uris,
+                server_id: c.server_id,
+                scopes,
+                created_at,
+            }
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+/// Create a new OAuth client
+pub async fn create_client(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(workspace_id): Path<Uuid>,
+    Json(body): Json<CreateOAuthClientRequest>,
+) -> Result<Json<OAuthClientResponse>, (StatusCode, String)> {
+    // Verify user is a member of this workspace with sufficient permissions
+    let member = WorkspaceRepository::get_member(&state.db, workspace_id, auth_user.user_id)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()))?
+        .ok_or((StatusCode::FORBIDDEN, "Not a workspace member".to_string()))?;
+
+    // Only Admin and Owner can create OAuth clients
+    if matches!(member.role(), WorkspaceRole::Viewer) {
+        return Err((StatusCode::FORBIDDEN, "Insufficient permissions".to_string()));
+    }
+
+    // Generate client_id and client_secret
+    let client_id = Uuid::new_v4().to_string();
+    let client_secret = generate_token(32);
+    let client_secret_hash = ApiKeyService::hash_key(&client_secret);
+
+    let data = CreateOAuthClient {
+        client_id: client_id.clone(),
+        client_secret_hash: Some(client_secret_hash),
+        client_name: body.client_name.clone(),
+        redirect_uris: body.redirect_uris.clone(),
+        grant_types: vec![
+            "authorization_code".to_string(),
+            "refresh_token".to_string(),
+        ],
+        token_endpoint_auth_method: "client_secret_basic".to_string(),
+        workspace_id: Some(workspace_id),
+        server_id: body.server_id,
+        scopes: body.scopes.clone(),
+        is_dynamic: false,
+        software_id: None,
+        software_version: None,
+    };
+
+    let client = OAuthClientRepository::create(&state.db, data)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let redirect_uris = client.redirect_uris();
+    let scopes = client.scopes();
+    let created_at = client.created_at.to_rfc3339();
+    Ok(Json(OAuthClientResponse {
+        id: client.id,
+        client_id: client.client_id,
+        client_secret: Some(client_secret), // Return secret only on creation
+        client_name: client.client_name,
+        redirect_uris,
+        server_id: client.server_id,
+        scopes,
+        created_at,
+    }))
+}
+
+/// Get OAuth client for a specific server
+pub async fn get_server_oauth(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path((workspace_id, server_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<OAuthClientResponse>, (StatusCode, String)> {
+    // Verify user is a member of this workspace
+    let _ = WorkspaceRepository::get_member(&state.db, workspace_id, auth_user.user_id)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()))?
+        .ok_or((StatusCode::FORBIDDEN, "Not a workspace member".to_string()))?;
+
+    let client = OAuthClientRepository::find_by_server_id(&state.db, server_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "OAuth client not found for this server".to_string()))?;
+
+    // Verify client belongs to workspace
+    if client.workspace_id != Some(workspace_id) {
+        return Err((StatusCode::NOT_FOUND, "OAuth client not found".to_string()));
+    }
+
+    let redirect_uris = client.redirect_uris();
+    let scopes = client.scopes();
+    let created_at = client.created_at.to_rfc3339();
+    Ok(Json(OAuthClientResponse {
+        id: client.id,
+        client_id: client.client_id,
+        client_secret: None, // Never return secret after creation
+        client_name: client.client_name,
+        redirect_uris,
+        server_id: client.server_id,
+        scopes,
+        created_at,
+    }))
+}
+
+/// Regenerate OAuth client secret for a server
+pub async fn regenerate_server_oauth_secret(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path((workspace_id, server_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<OAuthClientResponse>, (StatusCode, String)> {
+    // Verify user is a member of this workspace with sufficient permissions
+    let member = WorkspaceRepository::get_member(&state.db, workspace_id, auth_user.user_id)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()))?
+        .ok_or((StatusCode::FORBIDDEN, "Not a workspace member".to_string()))?;
+
+    // Only Admin and Owner can regenerate OAuth secrets
+    if matches!(member.role(), WorkspaceRole::Viewer) {
+        return Err((StatusCode::FORBIDDEN, "Insufficient permissions".to_string()));
+    }
+
+    let client = OAuthClientRepository::find_by_server_id(&state.db, server_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "OAuth client not found for this server".to_string()))?;
+
+    // Verify client belongs to workspace
+    if client.workspace_id != Some(workspace_id) {
+        return Err((StatusCode::NOT_FOUND, "OAuth client not found".to_string()));
+    }
+
+    // Generate new secret
+    let new_secret = generate_token(32);
+    let new_secret_hash = ApiKeyService::hash_key(&new_secret);
+
+    // Update the secret
+    OAuthClientRepository::update_secret(&state.db, client.id, &new_secret_hash)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Revoke all existing tokens
+    let _ = OAuthAccessTokenRepository::revoke_by_client(&state.db, client.id).await;
+    let _ = OAuthRefreshTokenRepository::revoke_by_client(&state.db, client.id).await;
+
+    let redirect_uris = client.redirect_uris();
+    let scopes = client.scopes();
+    let created_at = client.created_at.to_rfc3339();
+    Ok(Json(OAuthClientResponse {
+        id: client.id,
+        client_id: client.client_id,
+        client_secret: Some(new_secret), // Return new secret
+        client_name: client.client_name,
+        redirect_uris,
+        server_id: client.server_id,
+        scopes,
+        created_at,
+    }))
+}
+
+/// Delete an OAuth client
+pub async fn delete_client(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path((workspace_id, client_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // Verify user is a member of this workspace with sufficient permissions
+    let member = WorkspaceRepository::get_member(&state.db, workspace_id, auth_user.user_id)
+        .await
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string()))?
+        .ok_or((StatusCode::FORBIDDEN, "Not a workspace member".to_string()))?;
+
+    // Only Admin and Owner can delete OAuth clients
+    if matches!(member.role(), WorkspaceRole::Viewer) {
+        return Err((StatusCode::FORBIDDEN, "Insufficient permissions".to_string()));
+    }
+
+    // Verify client belongs to workspace
+    let client = OAuthClientRepository::find_by_id(&state.db, client_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "Client not found".to_string()))?;
+
+    if client.workspace_id != Some(workspace_id) {
+        return Err((StatusCode::NOT_FOUND, "Client not found".to_string()));
+    }
+
+    // Revoke all tokens for this client
+    let _ = OAuthAccessTokenRepository::revoke_by_client(&state.db, client_id).await;
+    let _ = OAuthRefreshTokenRepository::revoke_by_client(&state.db, client_id).await;
+
+    OAuthClientRepository::delete(&state.db, client_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ====================
+// OAuth 2.1 Authorization Server Endpoints
+// ====================
+
+/// Authorization Server Metadata (RFC 8414)
+/// GET /.well-known/oauth-authorization-server
+#[derive(Debug, Serialize)]
+pub struct AuthorizationServerMetadata {
+    pub issuer: String,
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub registration_endpoint: String,
+    pub response_types_supported: Vec<String>,
+    pub grant_types_supported: Vec<String>,
+    pub code_challenge_methods_supported: Vec<String>,
+    pub token_endpoint_auth_methods_supported: Vec<String>,
+}
+
+pub async fn authorization_server_metadata(
+    State(state): State<Arc<AppState>>,
+) -> Json<AuthorizationServerMetadata> {
+    tracing::info!("OAuth authorization server metadata requested");
+
+    // Use API_URL environment variable, fallback to constructing from server config
+    let issuer = std::env::var("API_URL").unwrap_or_else(|_| {
+        format!("http://{}:{}", state.config.server.host, state.config.server.port)
+    });
+
+    Json(AuthorizationServerMetadata {
+        issuer: issuer.clone(),
+        authorization_endpoint: format!("{}/oauth/authorize", issuer),
+        token_endpoint: format!("{}/oauth/token", issuer),
+        registration_endpoint: format!("{}/oauth/register", issuer),
+        response_types_supported: vec!["code".to_string()],
+        grant_types_supported: vec![
+            "authorization_code".to_string(),
+            "refresh_token".to_string(),
+        ],
+        code_challenge_methods_supported: vec!["S256".to_string()],
+        token_endpoint_auth_methods_supported: vec![
+            "client_secret_basic".to_string(),
+            "client_secret_post".to_string(),
+            "none".to_string(),
+        ],
+    })
+}
+
+// ====================
+// Dynamic Client Registration (RFC 7591)
+// ====================
+
+/// Client Registration Request (RFC 7591)
+#[derive(Debug, Deserialize)]
+pub struct ClientRegistrationRequest {
+    pub redirect_uris: Vec<String>,
+    #[serde(default)]
+    pub client_name: Option<String>,
+    #[serde(default = "default_token_endpoint_auth_method")]
+    pub token_endpoint_auth_method: String,
+    #[serde(default = "default_grant_types_dcr")]
+    pub grant_types: Vec<String>,
+    #[serde(default = "default_response_types")]
+    pub response_types: Vec<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub software_id: Option<String>,
+    #[serde(default)]
+    pub software_version: Option<String>,
+}
+
+fn default_token_endpoint_auth_method() -> String {
+    "none".to_string()
+}
+
+fn default_grant_types_dcr() -> Vec<String> {
+    vec!["authorization_code".to_string()]
+}
+
+fn default_response_types() -> Vec<String> {
+    vec!["code".to_string()]
+}
+
+/// Client Registration Response (RFC 7591)
+#[derive(Debug, Serialize)]
+pub struct ClientRegistrationResponse {
+    pub client_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    pub client_id_issued_at: i64,
+    pub client_secret_expires_at: i64,
+    pub redirect_uris: Vec<String>,
+    pub client_name: String,
+    pub token_endpoint_auth_method: String,
+    pub grant_types: Vec<String>,
+    pub response_types: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub software_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub software_version: Option<String>,
+}
+
+/// Client Registration Error Response (RFC 7591)
+#[derive(Debug, Serialize)]
+pub struct ClientRegistrationErrorResponse {
+    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_description: Option<String>,
+}
+
+/// Dynamic Client Registration endpoint (RFC 7591)
+/// POST /oauth/register
+pub async fn register_client(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<ClientRegistrationRequest>,
+) -> Result<Json<ClientRegistrationResponse>, (StatusCode, Json<ClientRegistrationErrorResponse>)> {
+    // SECURITY: Rate limit OAuth client registration to prevent abuse
+    let ip = crate::middleware::rate_limit::extract_client_ip(&headers, &addr);
+    let rate_limit_key = format!("oauth_register_rate:{}", ip);
+
+    // Allow max 10 registrations per hour per IP
+    let lua_script = r#"
+        local current = redis.call('INCR', KEYS[1])
+        if current == 1 then
+            redis.call('EXPIRE', KEYS[1], 3600)
+        end
+        return current
+    "#;
+
+    let result: Result<i64, _> = fred::interfaces::LuaInterface::eval(
+        &state.redis,
+        lua_script,
+        vec![rate_limit_key],
+        Vec::<String>::new(),
+    )
+    .await;
+
+    if let Ok(count) = result {
+        if count > 10 {
+            tracing::warn!("OAuth registration rate limit exceeded for IP: {}", ip);
+            return Err((
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ClientRegistrationErrorResponse {
+                    error: "rate_limit_exceeded".to_string(),
+                    error_description: Some("Too many client registrations. Please try again later.".to_string()),
+                }),
+            ));
+        }
+    }
+
+    tracing::info!(
+        "OAuth dynamic client registration: redirect_uris={:?}, client_name={:?}",
+        body.redirect_uris,
+        body.client_name
+    );
+
+    // Validate redirect_uris
+    if body.redirect_uris.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ClientRegistrationErrorResponse {
+                error: "invalid_redirect_uri".to_string(),
+                error_description: Some("At least one redirect_uri is required".to_string()),
+            }),
+        ));
+    }
+
+    // Validate redirect URIs (must be HTTPS or localhost)
+    for uri in &body.redirect_uris {
+        if !is_valid_redirect_uri(uri) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ClientRegistrationErrorResponse {
+                    error: "invalid_redirect_uri".to_string(),
+                    error_description: Some(format!("Invalid redirect_uri: {}. Must be HTTPS or localhost.", uri)),
+                }),
+            ));
+        }
+    }
+
+    // Generate client_id
+    let client_id = Uuid::new_v4().to_string();
+
+    // For public clients (token_endpoint_auth_method = "none"), no secret is needed
+    let (client_secret, client_secret_hash) = if body.token_endpoint_auth_method == "none" {
+        (None, None)
+    } else {
+        let secret = generate_token(32);
+        let hash = ApiKeyService::hash_key(&secret);
+        (Some(secret), Some(hash))
+    };
+
+    let client_name = body.client_name.clone().unwrap_or_else(|| "Dynamic Client".to_string());
+
+    // Parse scopes
+    let scopes = body
+        .scope
+        .as_deref()
+        .map(|s| s.split_whitespace().map(|s| s.to_string()).collect())
+        .unwrap_or_else(|| vec!["*".to_string()]);
+
+    let data = CreateOAuthClient {
+        client_id: client_id.clone(),
+        client_secret_hash,
+        client_name: client_name.clone(),
+        redirect_uris: body.redirect_uris.clone(),
+        grant_types: body.grant_types.clone(),
+        token_endpoint_auth_method: body.token_endpoint_auth_method.clone(),
+        workspace_id: None, // Dynamic clients don't belong to a workspace
+        server_id: None,
+        scopes,
+        is_dynamic: true,
+        software_id: body.software_id.clone(),
+        software_version: body.software_version.clone(),
+    };
+
+    let created = OAuthClientRepository::create(&state.db, data)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to create OAuth client: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ClientRegistrationErrorResponse {
+                    error: "server_error".to_string(),
+                    error_description: Some("Failed to register client".to_string()),
+                }),
+            )
+        })?;
+
+    let issued_at = created.created_at.timestamp();
+
+    tracing::info!(
+        "OAuth dynamic client registered: client_id={}, client_name={}",
+        client_id,
+        client_name
+    );
+
+    Ok(Json(ClientRegistrationResponse {
+        client_id,
+        client_secret,
+        client_id_issued_at: issued_at,
+        client_secret_expires_at: 0, // Never expires
+        redirect_uris: body.redirect_uris,
+        client_name,
+        token_endpoint_auth_method: body.token_endpoint_auth_method,
+        grant_types: body.grant_types,
+        response_types: body.response_types,
+        scope: body.scope,
+        software_id: body.software_id,
+        software_version: body.software_version,
+    }))
+}
+
+/// Validate redirect URI (must be HTTPS or localhost)
+fn is_valid_redirect_uri(uri: &str) -> bool {
+    if let Ok(parsed) = Url::parse(uri) {
+        let host = parsed.host_str().unwrap_or("");
+        // Allow localhost (RFC 8252)
+        if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+            return true;
+        }
+        // Allow Claude.ai/Claude.com callbacks
+        // Claude uses both domains depending on region/service
+        if (host == "claude.ai" || host == "claude.com") && parsed.scheme() == "https" {
+            return true;
+        }
+        // All other URIs must be HTTPS
+        parsed.scheme() == "https"
+    } else {
+        false
+    }
+}
+
+/// Authorization Request Parameters
+#[derive(Debug, Deserialize)]
+pub struct AuthorizeRequest {
+    pub response_type: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub state: Option<String>,
+    pub code_challenge: String,
+    pub code_challenge_method: Option<String>,
+    pub scope: Option<String>,
+}
+
+/// Authorization endpoint - shows consent page or redirects to login
+/// GET /oauth/authorize
+pub async fn authorize(
+    State(state): State<Arc<AppState>>,
+    auth_user: Option<AuthUser>,
+    Query(params): Query<AuthorizeRequest>,
+) -> Result<Response, (StatusCode, String)> {
+    tracing::info!(
+        "OAuth authorize request: client_id={}, redirect_uri={}, user_present={}",
+        params.client_id,
+        params.redirect_uri,
+        auth_user.is_some()
+    );
+
+    // Validate response_type
+    if params.response_type != "code" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "unsupported_response_type".to_string(),
+        ));
+    }
+
+    // Validate code_challenge_method
+    let method = params.code_challenge_method.as_deref().unwrap_or("S256");
+    if method != "S256" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Only S256 code_challenge_method is supported".to_string(),
+        ));
+    }
+
+    // Find the OAuth client
+    let client = OAuthClientRepository::find_by_client_id(&state.db, &params.client_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::BAD_REQUEST, "invalid_client".to_string()))?;
+
+    // Validate redirect_uri
+    if !client.is_redirect_uri_valid(&params.redirect_uri) {
+        return Err((StatusCode::BAD_REQUEST, "invalid_redirect_uri".to_string()));
+    }
+
+    // If user is not logged in, redirect to login with return URL
+    let user = match auth_user {
+        Some(u) => {
+            tracing::info!("OAuth authorize: user {} is logged in", u.user_id);
+            u
+        }
+        None => {
+            // Build return URL with all OAuth params (must be absolute URL to API server)
+            let api_url = std::env::var("API_URL").unwrap_or_else(|_| {
+                format!("http://{}:{}", state.config.server.host, state.config.server.port)
+            });
+            let return_url = format!(
+                "{}/oauth/authorize?response_type={}&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method={}&state={}",
+                api_url,
+                params.response_type,
+                params.client_id,
+                urlencoding::encode(&params.redirect_uri),
+                params.code_challenge,
+                method,
+                params.state.as_deref().unwrap_or("")
+            );
+            let login_url = format!(
+                "{}/?return_to={}",
+                state.config.server.frontend_url,
+                urlencoding::encode(&return_url)
+            );
+            tracing::info!("OAuth authorize: redirecting to login: {}", login_url);
+            return Ok(Redirect::temporary(&login_url).into_response());
+        }
+    };
+
+    // Generate authorization code
+    let code = generate_token(32);
+    let code_hash = ApiKeyService::hash_key(&code);
+
+    let requested_scopes: Vec<String> = params
+        .scope
+        .as_deref()
+        .unwrap_or("*")
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+
+    // SECURITY: Validate requested scopes against client's allowed scopes
+    let client_scopes = client.scopes();
+    let has_wildcard = client_scopes.contains(&"*".to_string());
+
+    if !has_wildcard {
+        for scope in &requested_scopes {
+            if scope != "*" && !client_scopes.contains(scope) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Scope '{}' is not authorized for this client", scope),
+                ));
+            }
+        }
+    }
+
+    // Use validated scopes (or client's scopes if wildcard requested)
+    let scopes = if requested_scopes.contains(&"*".to_string()) && !has_wildcard {
+        client_scopes // Use client's actual scopes instead of wildcard
+    } else {
+        requested_scopes
+    };
+
+    let auth_code = CreateOAuthAuthorizationCode {
+        code_hash,
+        client_id: client.id,
+        user_id: user.user_id,
+        redirect_uri: params.redirect_uri.clone(),
+        scopes,
+        code_challenge: params.code_challenge.clone(),
+        code_challenge_method: method.to_string(),
+        expires_at: Utc::now() + Duration::minutes(AUTH_CODE_EXPIRES_MINUTES),
+    };
+
+    OAuthAuthorizationCodeRepository::create(&state.db, auth_code)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // Redirect back to client with authorization code
+    let redirect_url = if params.redirect_uri.contains('?') {
+        format!(
+            "{}&code={}&state={}",
+            params.redirect_uri,
+            code,
+            params.state.as_deref().unwrap_or("")
+        )
+    } else {
+        format!(
+            "{}?code={}&state={}",
+            params.redirect_uri,
+            code,
+            params.state.as_deref().unwrap_or("")
+        )
+    };
+
+    Ok(Redirect::temporary(&redirect_url).into_response())
+}
+
+/// Token Request
+#[derive(Debug, Deserialize)]
+pub struct TokenRequest {
+    pub grant_type: String,
+    pub code: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub code_verifier: Option<String>,
+    pub refresh_token: Option<String>,
+    pub client_id: Option<String>,
+    #[allow(dead_code)]
+    pub client_secret: Option<String>,
+}
+
+/// Token Response
+#[derive(Debug, Serialize)]
+pub struct TokenResponse {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
+    pub refresh_token: Option<String>,
+    pub scope: String,
+}
+
+/// Token endpoint - exchange code for tokens
+/// POST /oauth/token
+/// Accepts application/x-www-form-urlencoded as per OAuth 2.0 RFC 6749
+pub async fn token(
+    State(state): State<Arc<AppState>>,
+    Form(body): Form<TokenRequest>,
+) -> Result<Json<TokenResponse>, (StatusCode, Json<TokenErrorResponse>)> {
+    tracing::info!(
+        "OAuth token request: grant_type={}, client_id={:?}",
+        body.grant_type,
+        body.client_id
+    );
+
+    match body.grant_type.as_str() {
+        "authorization_code" => exchange_code(state, body).await,
+        "refresh_token" => refresh_access_token(state, body).await,
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(TokenErrorResponse {
+                error: "unsupported_grant_type".to_string(),
+                error_description: Some("Only authorization_code and refresh_token are supported".to_string()),
+            }),
+        )),
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TokenErrorResponse {
+    pub error: String,
+    pub error_description: Option<String>,
+}
+
+async fn exchange_code(
+    state: Arc<AppState>,
+    body: TokenRequest,
+) -> Result<Json<TokenResponse>, (StatusCode, Json<TokenErrorResponse>)> {
+    tracing::info!(
+        "OAuth token exchange request: client_id={:?}, redirect_uri={:?}",
+        body.client_id,
+        body.redirect_uri
+    );
+
+    let code = body.code.ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(TokenErrorResponse {
+            error: "invalid_request".to_string(),
+            error_description: Some("code is required".to_string()),
+        }),
+    ))?;
+
+    let code_verifier = body.code_verifier.ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(TokenErrorResponse {
+            error: "invalid_request".to_string(),
+            error_description: Some("code_verifier is required".to_string()),
+        }),
+    ))?;
+
+    let redirect_uri = body.redirect_uri.ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(TokenErrorResponse {
+            error: "invalid_request".to_string(),
+            error_description: Some("redirect_uri is required".to_string()),
+        }),
+    ))?;
+
+    // Find the authorization code
+    let code_hash = ApiKeyService::hash_key(&code);
+    let auth_code = OAuthAuthorizationCodeRepository::find_by_code_hash(&state.db, &code_hash)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(TokenErrorResponse {
+                    error: "server_error".to_string(),
+                    error_description: None,
+                }),
+            )
+        })?
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            Json(TokenErrorResponse {
+                error: "invalid_grant".to_string(),
+                error_description: Some("Invalid or expired authorization code".to_string()),
+            }),
+        ))?;
+
+    // Check if code is expired or used
+    if auth_code.is_expired() || auth_code.is_used() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(TokenErrorResponse {
+                error: "invalid_grant".to_string(),
+                error_description: Some("Authorization code has expired or been used".to_string()),
+            }),
+        ));
+    }
+
+    // Verify redirect_uri matches
+    if auth_code.redirect_uri != redirect_uri {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(TokenErrorResponse {
+                error: "invalid_grant".to_string(),
+                error_description: Some("redirect_uri does not match".to_string()),
+            }),
+        ));
+    }
+
+    // Verify PKCE code_verifier
+    let computed_challenge = compute_code_challenge(&code_verifier);
+    if computed_challenge != auth_code.code_challenge {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(TokenErrorResponse {
+                error: "invalid_grant".to_string(),
+                error_description: Some("Invalid code_verifier".to_string()),
+            }),
+        ));
+    }
+
+    // Mark code as used
+    let _ = OAuthAuthorizationCodeRepository::mark_as_used(&state.db, auth_code.id).await;
+
+    // Generate access token
+    let access_token = generate_token(32);
+    let access_token_hash = ApiKeyService::hash_key(&access_token);
+    let access_expires_at = Utc::now() + Duration::hours(ACCESS_TOKEN_EXPIRES_HOURS);
+
+    let scopes = auth_code.scopes();
+
+    let access_token_data = CreateOAuthAccessToken {
+        token_hash: access_token_hash,
+        client_id: auth_code.client_id,
+        user_id: auth_code.user_id,
+        scopes: scopes.clone(),
+        expires_at: access_expires_at,
+    };
+
+    let created_access_token = OAuthAccessTokenRepository::create(&state.db, access_token_data)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(TokenErrorResponse {
+                    error: "server_error".to_string(),
+                    error_description: None,
+                }),
+            )
+        })?;
+
+    // Generate refresh token
+    let refresh_token = generate_token(32);
+    let refresh_token_hash = ApiKeyService::hash_key(&refresh_token);
+    let refresh_expires_at = Utc::now() + Duration::days(REFRESH_TOKEN_EXPIRES_DAYS);
+
+    let refresh_token_data = CreateOAuthRefreshToken {
+        token_hash: refresh_token_hash,
+        client_id: auth_code.client_id,
+        user_id: auth_code.user_id,
+        scopes: scopes.clone(),
+        access_token_id: Some(created_access_token.id),
+        expires_at: refresh_expires_at,
+    };
+
+    OAuthRefreshTokenRepository::create(&state.db, refresh_token_data)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(TokenErrorResponse {
+                    error: "server_error".to_string(),
+                    error_description: None,
+                }),
+            )
+        })?;
+
+    tracing::info!(
+        "OAuth token exchange success: client_id={:?}, user_id={}",
+        body.client_id,
+        auth_code.user_id
+    );
+
+    Ok(Json(TokenResponse {
+        access_token,
+        token_type: "Bearer".to_string(),
+        expires_in: ACCESS_TOKEN_EXPIRES_HOURS * 3600,
+        refresh_token: Some(refresh_token),
+        scope: scopes.join(" "),
+    }))
+}
+
+async fn refresh_access_token(
+    state: Arc<AppState>,
+    body: TokenRequest,
+) -> Result<Json<TokenResponse>, (StatusCode, Json<TokenErrorResponse>)> {
+    let refresh_token = body.refresh_token.ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(TokenErrorResponse {
+            error: "invalid_request".to_string(),
+            error_description: Some("refresh_token is required".to_string()),
+        }),
+    ))?;
+
+    // Find the refresh token
+    let token_hash = ApiKeyService::hash_key(&refresh_token);
+    let stored_token = OAuthRefreshTokenRepository::find_by_token_hash(&state.db, &token_hash)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(TokenErrorResponse {
+                    error: "server_error".to_string(),
+                    error_description: None,
+                }),
+            )
+        })?
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            Json(TokenErrorResponse {
+                error: "invalid_grant".to_string(),
+                error_description: Some("Invalid refresh token".to_string()),
+            }),
+        ))?;
+
+    if !stored_token.is_valid() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(TokenErrorResponse {
+                error: "invalid_grant".to_string(),
+                error_description: Some("Refresh token has expired or been revoked".to_string()),
+            }),
+        ));
+    }
+
+    // Revoke old access token if it exists
+    if let Some(access_token_id) = stored_token.access_token_id {
+        let _ = OAuthAccessTokenRepository::revoke(&state.db, access_token_id).await;
+    }
+
+    // Generate new access token
+    let access_token = generate_token(32);
+    let access_token_hash = ApiKeyService::hash_key(&access_token);
+    let access_expires_at = Utc::now() + Duration::hours(ACCESS_TOKEN_EXPIRES_HOURS);
+
+    let scopes = stored_token.scopes();
+
+    let access_token_data = CreateOAuthAccessToken {
+        token_hash: access_token_hash,
+        client_id: stored_token.client_id,
+        user_id: stored_token.user_id,
+        scopes: scopes.clone(),
+        expires_at: access_expires_at,
+    };
+
+    OAuthAccessTokenRepository::create(&state.db, access_token_data)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(TokenErrorResponse {
+                    error: "server_error".to_string(),
+                    error_description: None,
+                }),
+            )
+        })?;
+
+    Ok(Json(TokenResponse {
+        access_token,
+        token_type: "Bearer".to_string(),
+        expires_in: ACCESS_TOKEN_EXPIRES_HOURS * 3600,
+        refresh_token: None, // Don't issue new refresh token on refresh
+        scope: scopes.join(" "),
+    }))
+}
+
+// ====================
+// Helper Functions
+// ====================
+
+fn generate_token(bytes: usize) -> String {
+    // Generate a cryptographically secure random token
+    // Uses rand's thread_rng which is backed by the OS CSPRNG
+    let mut rng = rand::thread_rng();
+    let mut token_bytes = vec![0u8; bytes];
+    rng.fill_bytes(&mut token_bytes);
+    // Use URL-safe base64 encoding without padding for OAuth tokens
+    URL_SAFE_NO_PAD.encode(&token_bytes)
+}
+
+fn compute_code_challenge(code_verifier: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(code_verifier.as_bytes());
+    let result = hasher.finalize();
+    URL_SAFE_NO_PAD.encode(&result)
+}
+
+// ====================
+// Frontend OAuth Authorization Code Generation
+// ====================
+
+/// Request to generate authorization code from frontend
+#[derive(Debug, Deserialize)]
+pub struct AuthorizeCodeRequest {
+    pub response_type: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub code_challenge: String,
+    #[serde(default = "default_code_challenge_method")]
+    pub code_challenge_method: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub state: String,
+    #[serde(default = "default_scope")]
+    pub scope: String,
+}
+
+fn default_code_challenge_method() -> String {
+    "S256".to_string()
+}
+
+fn default_scope() -> String {
+    "*".to_string()
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthorizeCodeResponse {
+    pub code: String,
+}
+
+/// Generate authorization code for logged-in user (called from frontend)
+/// POST /api/v1/oauth/authorize-code
+pub async fn authorize_code(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Json(body): Json<AuthorizeCodeRequest>,
+) -> Result<Json<AuthorizeCodeResponse>, (StatusCode, String)> {
+    tracing::info!(
+        "OAuth authorize-code request: client_id={}, redirect_uri={}, user_id={}",
+        body.client_id,
+        body.redirect_uri,
+        auth_user.user_id
+    );
+    // Validate response_type
+    if body.response_type != "code" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "unsupported_response_type".to_string(),
+        ));
+    }
+
+    // Validate code_challenge_method
+    if body.code_challenge_method != "S256" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Only S256 code_challenge_method is supported".to_string(),
+        ));
+    }
+
+    // Find the OAuth client
+    let client = OAuthClientRepository::find_by_client_id(&state.db, &body.client_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::BAD_REQUEST, "invalid_client".to_string()))?;
+
+    // Validate redirect_uri
+    if !client.is_redirect_uri_valid(&body.redirect_uri) {
+        return Err((StatusCode::BAD_REQUEST, "invalid_redirect_uri".to_string()));
+    }
+
+    // Generate authorization code
+    let code = generate_token(32);
+    let code_hash = ApiKeyService::hash_key(&code);
+
+    let requested_scopes: Vec<String> = body
+        .scope
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+
+    // SECURITY: Validate requested scopes against client's allowed scopes
+    let client_scopes = client.scopes();
+    let has_wildcard = client_scopes.contains(&"*".to_string());
+
+    if !has_wildcard {
+        for scope in &requested_scopes {
+            if scope != "*" && !client_scopes.contains(scope) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("Scope '{}' is not authorized for this client", scope),
+                ));
+            }
+        }
+    }
+
+    // Use validated scopes (or client's scopes if wildcard requested)
+    let scopes = if requested_scopes.contains(&"*".to_string()) && !has_wildcard {
+        client_scopes
+    } else {
+        requested_scopes
+    };
+
+    // Capture values for logging before they are moved
+    let log_client_id = body.client_id.clone();
+    let log_redirect_uri = body.redirect_uri.clone();
+
+    let auth_code = CreateOAuthAuthorizationCode {
+        code_hash,
+        client_id: client.id,
+        user_id: auth_user.user_id,
+        redirect_uri: body.redirect_uri,
+        scopes,
+        code_challenge: body.code_challenge,
+        code_challenge_method: body.code_challenge_method,
+        expires_at: Utc::now() + Duration::minutes(AUTH_CODE_EXPIRES_MINUTES),
+    };
+
+    OAuthAuthorizationCodeRepository::create(&state.db, auth_code)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    tracing::info!(
+        "OAuth authorize-code success: client_id={}, redirect_uri={}, user_id={}",
+        log_client_id,
+        log_redirect_uri,
+        auth_user.user_id
+    );
+
+    Ok(Json(AuthorizeCodeResponse { code }))
+}

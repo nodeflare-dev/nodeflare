@@ -1,0 +1,74 @@
+[package]
+name = "mcp-api"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mcp-api"
+path = "src/main.rs"
+
+[dependencies]
+mcp-common = { path = "../common" }
+mcp-db = { path = "../db" }
+mcp-auth = { path = "../auth" }
+mcp-queue = { path = "../queue" }
+mcp-github = { path = "../github" }
+mcp-billing = { path = "../billing" }
+mcp-email = { path = "../email" }
+mcp-container = { path = "../container" }
+
+# Async
+tokio.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+
+# Web
+axum.workspace = true
+axum-extra.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Database
+sqlx.workspace = true
+fred.workspace = true
+
+# Validation
+validator.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# OpenAPI
+utoipa.workspace = true
+utoipa-scalar.workspace = true
+
+# HTTP client
+reqwest.workspace = true
+
+# TLS
+rustls = { version = "0.23", features = ["ring"] }
+
+# Utils
+uuid.workspace = true
+chrono.workspace = true
+dotenvy.workspace = true
+regex = "1"
+url = "2"
+once_cell = "1.19"
+base64 = "0.22"
+sha2 = "0.10"
+urlencoding = "2"
+rand = "0.8"
+
+# Redis (for pub/sub WebSocket events)
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }

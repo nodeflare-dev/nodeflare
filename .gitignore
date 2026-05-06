@@ -1,0 +1,65 @@
+# Rust
+/target/
+Cargo.lock
+
+# Dependencies
+node_modules/
+
+# Build outputs
+.next/
+out/
+dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database
+*.db
+*.sqlite
+
+# Keys and secrets
+*.pem
+*.key
+secrets/
+
+# Docker
+docker-compose.override.yml
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+*.bak
+*.tmp
+
+# Local scripts (not for OSS)
+scripts/
+tsconfig.tsbuildinfo
+
+# Internal/operational docs (Japanese)
+docs/infrastructure-cost-analysis.md
+docs/アーキテクチャ.md
+docs/セキュリティ.md
+docs/デプロイ手順.md
+docs/ユーザーガイド.md
+docs/開発ガイド.md

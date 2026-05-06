@@ -1,0 +1,21 @@
+# Frontend
+apps/
+node_modules/
+
+# Build artifacts
+target/
+*.log
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.md
+LICENSE
+.env*
+fly.toml

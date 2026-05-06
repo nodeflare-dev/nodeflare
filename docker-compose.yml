@@ -1,0 +1,77 @@
+version: '3.8'
+
+# This docker-compose uses Neon (PostgreSQL) and Upstash (Redis) directly.
+# No local database containers - connect to managed services.
+
+services:
+  # API Server
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: mcp-api
+    ports:
+      - "8080:8080"
+    environment:
+      ENVIRONMENT: development
+      # Neon PostgreSQL (set in .env)
+      DATABASE_URL: ${DATABASE_URL}
+      # Upstash Redis (set in .env)
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      FLY_API_TOKEN: ${FLY_API_TOKEN:-}
+      FLY_ORG_SLUG: ${FLY_ORG_SLUG:-personal}
+      FLY_REGION: ${FLY_REGION:-nrt}
+      RUST_LOG: debug
+
+  # Proxy Gateway
+  proxy:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.proxy
+    container_name: mcp-proxy
+    ports:
+      - "8081:8081"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      PROXY_PORT: 8081
+      PROXY_BASE_DOMAIN: ${PROXY_BASE_DOMAIN:-nodeflare.tech}
+      RUST_LOG: debug
+
+  # Builder Worker
+  builder:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.builder
+    container_name: mcp-builder
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      FLY_API_TOKEN: ${FLY_API_TOKEN:-}
+      FLY_ORG_SLUG: ${FLY_ORG_SLUG:-personal}
+      FLY_REGION: ${FLY_REGION:-nrt}
+      RUST_LOG: debug
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # Next.js Frontend (development)
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: mcp-web
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      NEXT_PUBLIC_PROXY_URL: http://localhost:8081
+      NEXT_PUBLIC_PROXY_BASE_DOMAIN: ${PROXY_BASE_DOMAIN:-nodeflare.tech}
+    depends_on:
+      - api

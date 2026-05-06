@@ -1,0 +1,1321 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "An error occurred",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "confirm": "Confirm",
+    "back": "Back",
+    "next": "Next",
+    "submit": "Submit",
+    "close": "Close",
+    "search": "Search",
+    "filter": "Filter",
+    "all": "All",
+    "none": "None",
+    "yes": "Yes",
+    "no": "No",
+    "add": "Add",
+    "copy": "Copy",
+    "dismiss": "Dismiss",
+    "change": "Change",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "previous": "Previous",
+    "showing": "Showing {from} to {to} of {total}",
+    "notFound": "Not found",
+    "retry": "Retry",
+    "copied": "Copied!"
+  },
+  "nav": {
+    "home": "Home",
+    "dashboard": "Dashboard",
+    "servers": "MCP Servers",
+    "auth": "Authentication",
+    "accessTokens": "Access Tokens",
+    "vpn": "VPN",
+    "team": "Team Members",
+    "logs": "Request Logs",
+    "settings": "Settings",
+    "docs": "Docs",
+    "blog": "Blog",
+    "faq": "FAQ",
+    "contact": "Contact",
+    "login": "Login",
+    "logout": "Logout",
+    "signup": "Sign Up",
+    "overview": "Dashboard",
+    "billing": "Plans & Billing"
+  },
+  "home": {
+    "title": "MCP Hosting - Nodeflare",
+    "heroTitle1": "MCP",
+    "heroTitle2": "Hosting",
+    "heroDescription1": "Auto-convert GitHub stdio MCPs to SSE format",
+    "heroDescription2": "Deploy instantly with just a URL",
+    "heroDescription3": "Manage permissions and access logs from one dashboard",
+    "heroDescription4": "Most features are free",
+    "startWithGithub": "Start with GitHub",
+    "dashboard": {
+      "screenTitle": "Dashboard Screen",
+      "servers": "Servers",
+      "serversRunning": "Your servers",
+      "platformStats": "Platform Statistics",
+      "liveData": "Real-time data",
+      "totalServers": "Total Servers",
+      "runningServers": "Running",
+      "totalWorkspaces": "Workspaces",
+      "newServer": "New Server",
+      "requests": "Requests",
+      "uptime": "Uptime",
+      "status": {
+        "running": "Running",
+        "deploying": "Deploying"
+      },
+      "slideLabels": {
+        "dashboard": "Dashboard",
+        "servers": "Server List",
+        "serverDetail": "Server Detail",
+        "auth": "Authentication",
+        "logs": "Request Logs"
+      }
+    },
+    "features": {
+      "badge": "Why Nodeflare?",
+      "title": "What Nodeflare Can Do",
+      "zeroConfig": {
+        "title": "stdio→SSE Auto-Convert",
+        "desc": "Auto-convert any stdio MCP from GitHub to SSE by just specifying the URL. No fork needed, deploy instantly"
+      },
+      "acl": {
+        "title": "Fine-Grained Permissions",
+        "desc": "Control which tools each access token can call at the method level. OAuth supported"
+      },
+      "secrets": {
+        "title": "Secret Management",
+        "desc": "Store environment variables encrypted. Share safely with your team"
+      },
+      "protocol": {
+        "title": "Audit with Access Logs",
+        "desc": "Record who called what and when. Complete access logs only possible with SSE format"
+      },
+      "alwaysOn": {
+        "title": "Prevent Internal MCP Leakage",
+        "desc": "With stdio, you can't track who called what. SSE format logs every token, enabling instant detection of external leaks"
+      }
+    },
+    "devExperience": {
+      "badge": "Access Control",
+      "title": "No Need to\nImplement Auth",
+      "description": "No auth code needed in your MCP server. Nodeflare handles token authentication, per-tool permissions, and audit logging for you.",
+      "tokenAuth": "Bearer Token / OAuth 2.0 auto-attached",
+      "toolPermission": "Allow/deny tools/call per method",
+      "accessLog": "Audit logs recorded per request",
+      "noCode": "Zero code changes to your MCP",
+      "codeComment": "Search Notion pages"
+    },
+    "pricing": {
+      "badge": "Pricing",
+      "title": "Most Features Are Free",
+      "subtitle": "Free tier is enough for personal use. Go Pro for production.",
+      "perMonth": "/mo",
+      "free": {
+        "name": "Free",
+        "price": "¥0",
+        "description": "Perfect for personal projects and testing",
+        "feature1": "Up to 3 servers",
+        "feature2": "10,000 requests/month",
+        "feature3": "7-day log retention",
+        "feature4": "Community support",
+        "cta": "Start Free"
+      },
+      "pro": {
+        "name": "Pro",
+        "price": "¥2,980",
+        "badge": "Recommended",
+        "description": "Everything for production",
+        "feature1": "Up to 20 servers",
+        "feature2": "500,000 requests/month",
+        "feature3": "Custom domains",
+        "feature4": "30-day log retention",
+        "feature5": "Email support",
+        "cta": "Start Pro"
+      }
+    },
+    "blog": {
+      "badge": "Blog",
+      "title": "Blog",
+      "viewAll": "View All",
+      "viewAllArticles": "View All Articles",
+      "readMore": "Read More"
+    },
+    "faq": {
+      "badge": "FAQ",
+      "title": "FAQ",
+      "subtitle": "Common questions from new users",
+      "viewAll": "View All Questions",
+      "q1": {
+        "question": "What is Nodeflare?",
+        "answer": "A dedicated hosting service for MCP. Auto-convert any stdio-format MCP server from GitHub to SSE format and deploy. Fine-grained access token permissions and OAuth supported. Most features are free."
+      },
+      "q2": {
+        "question": "What's the difference between stdio and SSE?",
+        "answer": "stdio is for local execution and doesn't log who called what or when. SSE format accesses via HTTP, so all requests are logged and per-token permission control is possible. Effective for preventing internal MCP leakage."
+      },
+      "q3": {
+        "question": "What are the benefits for enterprises?",
+        "answer": "With SSE format, 'who called which tool and when' is fully logged. Audit logs impossible with stdio enable instant detection and response if internal MCPs leak externally."
+      }
+    },
+    "contact": {
+      "badge": "Contact",
+      "title": "Contact Us",
+      "subtitle": "Feel free to reach out with questions or inquiries",
+      "name": "Name",
+      "email": "Email",
+      "message": "Message",
+      "namePlaceholder": "John Doe",
+      "emailPlaceholder": "example@email.com",
+      "messagePlaceholder": "Enter your message here",
+      "cancel": "Cancel",
+      "submit": "Send",
+      "sending": "Sending...",
+      "successTitle": "Message Sent",
+      "successMessage": "Thank you for your message. We will get back to you soon.",
+      "errors": {
+        "invalidEmail": "Please enter a valid email address",
+        "messageTooShort": "Message must be at least 10 characters",
+        "messageTooLong": "Message must be less than 5000 characters"
+      }
+    }
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome back",
+    "overview": "Overview",
+    "recentActivity": "Recent Activity",
+    "quickActions": "Quick Actions",
+    "noServers": "No servers",
+    "createFirstServer": "Create your first server",
+    "newServer": "New Server",
+    "totalServers": "Total Servers",
+    "running": "Running",
+    "runningCount": "{running} / {total} running",
+    "requests": "Requests",
+    "requestsLabel": "{count} requests",
+    "errors": "Errors",
+    "errorsLabel": "{count} errors",
+    "requests7d": "Requests (7d)",
+    "errors7d": "Errors (7d)",
+    "recentServers": "Recent Servers",
+    "serverName": "Server",
+    "repository": "Repository",
+    "status": "Status",
+    "runtime": "Runtime",
+    "servers": "Servers",
+    "viewAll": "View all →",
+    "planUsage": "Plan Usage",
+    "manage": "Manage →",
+    "videos": "Videos",
+    "video1Title": "Nodeflare Introduction",
+    "video2Title": "MCP Server Deployment",
+    "blog": "Blog",
+    "serversLoadError": "Failed to load servers",
+    "retry": "Retry"
+  },
+  "servers": {
+    "title": "Servers",
+    "accessMode": {
+      "title": "Access Mode",
+      "description": "Control how this server can be accessed",
+      "public": "Public",
+      "vpn_only": "VPN Only"
+    },
+    "authEnabled": {
+      "title": "NodeFlare Authentication",
+      "description": "When disabled, NodeFlare's authentication layer is skipped. Use this when your MCP server handles its own authentication.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
+    "new": "New Server",
+    "list": "Server List",
+    "empty": "No servers yet",
+    "createFirst": "Create your first server",
+    "loadError": "Failed to load servers",
+    "retry": "Retry",
+    "repo": "Repository",
+    "runtime": "Runtime",
+    "visibility": "Visibility",
+    "usage": "{current} / {max} servers",
+    "upgrade": {
+      "title": "Upgrade Required",
+      "serverLimit": "You've reached your plan's server limit. Upgrade to create more servers.",
+      "deployLimit": "You've reached your deployment limit for this month. Upgrade to continue deploying.",
+      "cta": "View Plans"
+    },
+    "create": {
+      "title": "Create New Server",
+      "firstTitle": "Create Your First Server",
+      "welcome": "Welcome to Nodeflare",
+      "welcomeDesc": "Deploy MCP servers in seconds. Just connect your GitHub repository and we'll handle the rest.",
+      "configuration": "Server Configuration",
+      "name": "Server Name",
+      "namePlaceholder": "my-mcp-server",
+      "slug": "Slug",
+      "slugPlaceholder": "my-server",
+      "slugHelp": "URL identifier (lowercase letters and hyphens only)",
+      "description": "Description",
+      "descriptionPlaceholder": "Enter server description",
+      "descriptionBrief": "Brief description of the server",
+      "githubRepo": "GitHub Repository",
+      "githubRepoPlaceholder": "owner/repo",
+      "githubRepoHelp": "Enter in owner/repo format",
+      "searchRepos": "Search repositories...",
+      "loadingRepos": "Loading repositories...",
+      "noRepos": "No repositories found",
+      "noDescription": "No description",
+      "myRepos": "My Repositories",
+      "myReposDesc": "Select from your GitHub account",
+      "publicUrl": "Public Repository",
+      "publicUrlDesc": "Enter URL or owner/repo",
+      "publicUrlHelp": "Deploy any public GitHub repository directly. No fork required.",
+      "private": "Private",
+      "branch": "Branch",
+      "branchPlaceholder": "main",
+      "advancedSettings": "Advanced Settings",
+      "rootDirectory": "Root Directory",
+      "rootDirectoryHelp": "For monorepos, specify the subdirectory where the MCP server code is located",
+      "mcpPath": "MCP Endpoint Path",
+      "mcpPathHelp": "HTTP path where the MCP server listens (e.g., /mcp, /sse, /)",
+      "mcpPathAutoStdio": "Automatically set to /mcp for STDIO transport",
+      "entryCommand": "Entry Command",
+      "entryCommandHelp": "Custom command to start the server (e.g., python server.py, uv run mcp-server). If empty, auto-detected based on project structure.",
+      "authEnabled": "Enable NodeFlare Authentication",
+      "authEnabledHelp": "When disabled, NodeFlare's authentication layer is skipped. Use this when your MCP server handles its own authentication (e.g., Notion API).",
+      "authDisabledWarning": "Authentication is disabled. Make sure your MCP server handles authentication itself.",
+      "transport": "Transport",
+      "transportHelp": "How the MCP server communicates (SSE for HTTP servers, STDIO for stdin/stdout servers)",
+      "transportSseDesc": "HTTP/SSE endpoint",
+      "transportStdioDesc": "stdin/stdout (auto-converted)",
+      "runtime": "Runtime",
+      "runtimeNode": "Node.js",
+      "runtimePython": "Python",
+      "runtimeGo": "Go",
+      "runtimeRust": "Rust",
+      "runtimeDocker": "Docker",
+      "visibility": "Visibility",
+      "visibilityPublic": "Public",
+      "visibilityPrivate": "Private",
+      "visibilityTeam": "Team",
+      "region": "Region",
+      "regionHelp": "Select the region to deploy your server",
+      "submit": "Create Server",
+      "creating": "Creating...",
+      "failed": "Failed to create server",
+      "trySuggestion": "Try this slug:"
+    },
+    "regions": {
+      "title": "Region",
+      "iad": "Virginia (US East)"
+    },
+    "detail": {
+      "overview": "Overview",
+      "deployments": "Deployments",
+      "logs": "Logs",
+      "settings": "Settings",
+      "secrets": "Secrets",
+      "tools": "Tools",
+      "endpoint": "Endpoint",
+      "copyEndpoint": "Click to copy endpoint URL",
+      "status": "Status",
+      "runtime": "Runtime",
+      "lastDeployed": "Last Deployed",
+      "deploy": "Deploy",
+      "deploying": "Deploying...",
+      "deployUsage": "{current} / {max} deploys (this month)",
+      "stop": "Stop",
+      "restart": "Restart",
+      "deleteServer": "Delete Server",
+      "deleteConfirm": "Are you sure you want to delete this server?",
+      "deleteWarning": "This action cannot be undone. All deployments, settings, and secrets will be permanently deleted.",
+      "deleteConfirmLabel": "Please type the server name to confirm",
+      "repository": "Repository",
+      "publicUrl": "Public URL (Subdomain)",
+      "publicUrlDesc": "Use this URL to connect from Claude, ChatGPT, or other AI clients",
+      "noDeployments": "No deployments yet",
+      "pending": "Pending",
+      "noTools": "No tools detected. Deploy the server to detect tools.",
+      "addSecret": "Add Secret",
+      "keyPlaceholder": "KEY",
+      "valuePlaceholder": "Value",
+      "noSecrets": "No secrets configured",
+      "serverSettings": "Server Settings",
+      "settingsComingSoon": "Settings feature coming soon.",
+      "save": "Save",
+      "viewLogs": "View Logs",
+      "copySha": "Copy SHA",
+      "justNow": "just now",
+      "minutesAgo": " minutes ago",
+      "hoursAgo": " hours ago",
+      "daysAgo": " days ago",
+      "weeksAgo": " weeks ago",
+      "noCommitMessage": "No commit message",
+      "deployInfo": "Deploys this month",
+      "deployInfoDesc": "Your current plan allows {max} deploys per month.",
+      "deployInfoUnlimited": "Your current plan allows unlimited deploys.",
+      "pullAndDeploy": "Pull & Deploy",
+      "viewPlan": "View plan →",
+      "buildLogs": "Build Logs",
+      "buildOutput": "Build Output",
+      "live": "Live",
+      "linesCount": "{count} lines",
+      "pressEscToExit": "Press ESC to exit",
+      "follow": "Follow",
+      "fullscreen": "Fullscreen",
+      "exitFullscreen": "Exit fullscreen (ESC)",
+      "clickToViewLogs": "Click to view logs",
+      "deploys": "Deploys"
+    },
+    "deploy": {
+      "started": "Deployment started...",
+      "success": "Deployment completed!",
+      "failed": "Deployment failed"
+    },
+    "webhooks": {
+      "title": "Webhooks",
+      "add": "Add Webhook",
+      "name": "Name",
+      "url": "Webhook URL (HTTPS required)",
+      "urlPlaceholder": "https://hooks.slack.com/services/...",
+      "namePlaceholder": "My Slack Webhook",
+      "type": "Type",
+      "typeCustom": "Custom",
+      "typeSlack": "Slack",
+      "typeDiscord": "Discord",
+      "events": "When to notify",
+      "eventDeploySuccess": "Deploy Success",
+      "eventDeploySuccessDesc": "Notify when deployment succeeds",
+      "eventDeployFailure": "Deploy Failure",
+      "eventDeployFailureDesc": "Notify when deployment fails",
+      "eventDeployStarted": "Deploy Started",
+      "eventDeployStartedDesc": "Notify when deployment starts",
+      "secret": "Secret",
+      "secretPlaceholder": "Secret for signing (optional)",
+      "empty": "No webhooks configured",
+      "emptyDesc": "Add a webhook to receive notifications when deploys complete",
+      "test": "Test",
+      "testing": "Testing",
+      "testingWebhook": "Testing {name}...",
+      "testSuccess": "{name} test successful",
+      "testError": "{name} test failed",
+      "createSuccess": "Webhook created",
+      "createError": "Failed to create webhook",
+      "deleteSuccess": "Webhook deleted",
+      "delete": "Delete",
+      "deleteConfirm": "Delete this webhook?",
+      "lastTriggered": "Last triggered: {date}",
+      "success": "Success",
+      "failure": "Failure"
+    },
+    "test": {
+      "title": "Test Connection",
+      "description": "Run a test to check if your MCP server is responding correctly",
+      "runTest": "Run Test",
+      "runTestAgain": "Run Test Again",
+      "checking": "Checking connection...",
+      "connectionStatus": "Connection Status",
+      "refresh": "Refresh",
+      "statusHealthy": "Healthy",
+      "statusNotDeployed": "Not Deployed",
+      "statusUnreachable": "Unreachable",
+      "statusError": "Error",
+      "testTools": "Test Tools",
+      "selectTool": "Select Tool",
+      "chooseTool": "Choose a tool",
+      "inputSchema": "Input Schema",
+      "arguments": "Arguments (JSON)",
+      "execute": "Execute",
+      "executing": "Executing...",
+      "resultSuccess": "Success",
+      "resultError": "Error",
+      "testing": "Testing connection...",
+      "testSuccess": "Connection test successful",
+      "testFailed": "Connection test failed",
+      "noTools": "No tools available",
+      "showMore": "Show more",
+      "showLess": "Show less"
+    },
+    "metrics": {
+      "title": "Metrics",
+      "serverNotRunning": "Server is not running",
+      "deployFirst": "Deploy your server first to view metrics",
+      "loadError": "Failed to load metrics",
+      "retry": "Retry",
+      "refresh": "Refresh",
+      "memory": "Memory",
+      "cpu": "CPU",
+      "cpuUsage": "CPU utilization",
+      "network": "Network",
+      "networkIn": "Network In",
+      "networkOut": "Network Out",
+      "inbound": "Inbound traffic",
+      "outbound": "Outbound traffic",
+      "infoTitle": "Metrics are updated every 30 seconds",
+      "infoDescription": "Data shown is from the last hour. Memory and CPU are real-time, network is rate per second.",
+      "cpuHistory": "CPU Usage History",
+      "memoryHistory": "Memory Usage History",
+      "networkHistory": "Network I/O History",
+      "memoryUsed": "Used",
+      "memoryTotal": "Total",
+      "noData": "No data available"
+    },
+    "status": {
+      "running": "Running",
+      "stopped": "Stopped",
+      "inactive": "Inactive",
+      "building": "Building",
+      "deploying": "Deploying",
+      "failed": "Failed",
+      "pending": "Pending",
+      "success": "Success",
+      "succeeded": "Success"
+    },
+    "oauth": {
+      "title": "Claude Connection (OAuth)",
+      "description": "Authentication credentials for connecting to this server from Claude Desktop or Claude.ai.",
+      "regenerate": "Regenerate Secret",
+      "newSecretWarning": "A new secret has been generated. This value is only shown once. Copy it to a safe place.",
+      "copyAndDismiss": "Copy and dismiss",
+      "secretNote": "The secret is only shown once. If you lose it, you'll need to regenerate it.",
+      "notFound": "OAuth info not found"
+    }
+  },
+  "oauth": {
+    "title": "OAuth Apps",
+    "backToAuth": "Back to Authentication",
+    "new": "New App",
+    "yourApps": "Your OAuth Apps",
+    "empty": {
+      "title": "No OAuth Apps",
+      "description": "Create an OAuth app to allow Claude.ai and other OAuth-enabled clients to connect to your MCP servers."
+    },
+    "list": {
+      "created": "Created:",
+      "createdSuffix": ""
+    },
+    "created": {
+      "title": "OAuth App Created",
+      "warning": "The Client Secret is only shown once. Store it in a safe place.",
+      "dismiss": "Got it"
+    },
+    "delete": {
+      "title": "Delete",
+      "confirm": "Delete this OAuth app? Clients using this app will no longer be able to connect."
+    },
+    "create": {
+      "title": "Create New OAuth App",
+      "name": "App Name",
+      "namePlaceholder": "My Claude Connector",
+      "server": "Target Server",
+      "selectServer": "Select a server...",
+      "searchServers": "Search servers...",
+      "allServers": "All Servers",
+      "serverHint": "Access all servers in this workspace",
+      "noServersFound": "No servers found",
+      "noServersAvailable": "No servers available",
+      "redirectUri": "Redirect URI",
+      "redirectUriHelp": "For Claude custom connectors: https://claude.ai/api/mcp/auth_callback",
+      "submit": "Create App",
+      "creating": "Creating..."
+    },
+    "scopes": {
+      "title": "Permissions (Scopes)",
+      "fullAccess": "Full Access",
+      "toolsDesc": "Execute tools",
+      "resourcesDesc": "Access resources",
+      "promptsDesc": "Access prompts",
+      "selected": "Selected Scopes"
+    },
+    "customScope": "Custom Scope (Optional)",
+    "customScopeExamples": "Example: tools:call:get_weather, resources:read:file://data",
+    "app": {
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "redirectUris": "Redirect URIs",
+      "createdAt": "Created",
+      "copyClientId": "Copy Client ID",
+      "regenerateSecret": "Regenerate Secret",
+      "delete": "Delete",
+      "deleteConfirm": "Delete this OAuth app? Clients using this app will no longer be able to connect."
+    }
+  },
+  "accessTokens": {
+    "title": "Access Tokens",
+    "backToAuth": "Back to Authentication",
+    "new": "New Token",
+    "empty": "No access tokens yet",
+    "loadError": "Failed to load access tokens",
+    "yourKeys": "Your Access Tokens",
+    "created": "Access token created",
+    "createdWarning": "This token will only be shown once. Store it in a safe place.",
+    "revoke": "Revoke",
+    "revokeConfirm": "Revoke this access token? This action cannot be undone.",
+    "customScope": "Custom Scope (Optional)",
+    "customScopeExamples": "Example: tools:call:get_weather, resources:read:file://data",
+    "rateLimit": "Rate Limit (requests/hour)",
+    "rate": "Rate: {rate}/hour",
+    "lastUsed": "Last used: {date}",
+    "create": {
+      "title": "Create New Access Token",
+      "name": "Token Name",
+      "namePlaceholder": "my-access-token",
+      "server": "Target Server",
+      "selectServer": "Select a server...",
+      "allServers": "All Servers",
+      "serverHint": "Select a specific server or create a token with access to all servers in this workspace",
+      "searchServers": "Search servers...",
+      "submit": "Create Token",
+      "creating": "Creating..."
+    },
+    "scopes": {
+      "title": "Scopes (Permissions)",
+      "selected": "Selected Scopes",
+      "all": "All",
+      "toolsDesc": "Execute tools",
+      "resourcesDesc": "Read resources",
+      "promptsDesc": "Get prompts",
+      "fullAccess": "Full Access",
+      "fullAccessDesc": "All permissions (tools, resources, prompts)",
+      "toolsAll": "Tools - All",
+      "toolsAllDesc": "List and call tools",
+      "toolsList": "Tools - List Only",
+      "toolsListDesc": "Only list available tools",
+      "toolsCall": "Tools - Call",
+      "toolsCallDesc": "Call any tool (includes list)",
+      "resourcesAll": "Resources - All",
+      "resourcesAllDesc": "List and read resources",
+      "resourcesList": "Resources - List Only",
+      "resourcesListDesc": "Only list resources",
+      "resourcesRead": "Resources - Read",
+      "resourcesReadDesc": "Read any resource",
+      "promptsAll": "Prompts - All",
+      "promptsAllDesc": "List and get prompts",
+      "promptsList": "Prompts - List Only",
+      "promptsListDesc": "Only list prompts",
+      "promptsGet": "Prompts - Get",
+      "promptsGetDesc": "Get any prompt content",
+      "noPermissions": "No permissions"
+    }
+  },
+  "vpn": {
+    "title": "VPN Connection",
+    "description": "Securely connect to your MCP servers via WireGuard VPN",
+    "createConnection": "New Connection",
+    "activeConnections": "Active Connections",
+    "configGenerated": "Configuration Generated",
+    "importantNote": "Important:",
+    "configOnlyOnce": "This configuration contains your private key and will only be shown once. Download or copy it now.",
+    "peerName": "Peer Name",
+    "peerIP": "Peer IP",
+    "download": "Download",
+    "connectionName": "Connection Name",
+    "connectionNamePlaceholder": "my-laptop",
+    "connectionNameHint": "A name to identify this device (e.g., my-laptop, work-pc)",
+    "region": "Region",
+    "creating": "Creating...",
+    "create": "Create",
+    "createError": "Failed to create VPN connection. Please try again.",
+    "wireGuardInfo": "WireGuard is required to use VPN connections. Download from",
+    "deleteConfirmTitle": "Delete Connection",
+    "deleteConfirmMessage": "Are you sure you want to delete \"{name}\"? This cannot be undone."
+  },
+  "logs": {
+    "title": "Logs",
+    "requestLogs": "Request Logs",
+    "recentRequests": "Recent Requests",
+    "empty": "No logs",
+    "noLogs": "No request logs yet",
+    "loadError": "Failed to load logs",
+    "realtime": "Realtime",
+    "download": "Download",
+    "search": "Search logs...",
+    "filter": {
+      "all": "All",
+      "info": "Info",
+      "warning": "Warning",
+      "error": "Error"
+    },
+    "table": {
+      "time": "Time",
+      "method": "Method",
+      "path": "Path",
+      "tool": "Tool",
+      "status": "Status",
+      "duration": "Duration",
+      "host": "Host",
+      "request": "Request",
+      "messages": "Messages"
+    },
+    "live": "Live",
+    "noServers": "No servers found. Create a server first.",
+    "freeplanLimit": "Free plan shows logs from the last hour only",
+    "upgradePlan": "Upgrade Plan",
+    "status": {
+      "pending": "Pending",
+      "building": "Building",
+      "deploying": "Deploying",
+      "running": "Running",
+      "stopped": "Stopped",
+      "failed": "Failed"
+    },
+    "pdf": {
+      "title": "Request Logs",
+      "server": "Server",
+      "generated": "Generated",
+      "totalLogs": "Total Logs"
+    },
+    "tooltip": {
+      "stopAutoRefresh": "Stop auto-refresh",
+      "startAutoRefresh": "Start auto-refresh (2s)",
+      "refresh": "Refresh logs",
+      "downloadPdf": "Download PDF"
+    }
+  },
+  "team": {
+    "title": "Team Members",
+    "usage": "{current} / {max} members",
+    "addMember": "Add Member",
+    "empty": "You are the only member",
+    "loadError": "Failed to load team members",
+    "roles": {
+      "owner": "Owner",
+      "admin": "Admin",
+      "member": "Member",
+      "viewer": "Viewer"
+    },
+    "roleDesc": {
+      "admin": "Can manage servers and members",
+      "member": "Can create and edit servers",
+      "viewer": "Can only view servers"
+    },
+    "add": {
+      "title": "Add Team Member",
+      "email": "Email Address",
+      "role": "Role",
+      "submit": "Send Invitation"
+    },
+    "remove": {
+      "confirm": "Remove {name} from this workspace?"
+    },
+    "errors": {
+      "userNotFound": "No user found with this email",
+      "alreadyMember": "This user is already a member",
+      "limitReached": "Member limit reached for your plan"
+    },
+    "upgrade": {
+      "title": "Upgrade to add members",
+      "limitMessage": "Member limit reached. Upgrade to add more.",
+      "cta": "Upgrade"
+    }
+  },
+  "billing": {
+    "title": "Billing & Subscription",
+    "subtitle": "Manage your subscription and billing settings",
+    "loadError": "Failed to load billing information",
+    "currentPlan": "Current Plan",
+    "currentPlanDesc": "Your current subscription status",
+    "plan": "{plan} Plan",
+    "status": "Status",
+    "periodEnd": "Current period ends",
+    "invoiceHistory": "Invoice History",
+    "noInvoices": "No invoices yet",
+    "viewInvoice": "View invoice",
+    "downloadPdf": "Download PDF",
+    "manageSubscription": "Manage Subscription",
+    "cancelSubscription": "Cancel Subscription",
+    "cancelling": "Cancelling...",
+    "cancelTitle": "Cancel Subscription",
+    "cancelDesc": "Are you sure you want to cancel? You'll keep access until the end of your billing period, then your account will be downgraded to the free plan.",
+    "keepSubscription": "Keep Subscription",
+    "confirmCancel": "Yes, Cancel Subscription",
+    "undoCancel": "Undo Cancellation",
+    "undoCancelling": "Processing...",
+    "reactivate": "Reactivate",
+    "scheduledCancel": "Scheduled for Cancellation",
+    "scheduledCancelDesc": "This subscription will be cancelled on {date}. Undo cancellation to keep your subscription.",
+    "upgrade": "Upgrade",
+    "downgrade": "Downgrade",
+    "contactSales": "Contact Sales",
+    "enterpriseCustomPricing": "Custom pricing based on your needs",
+    "perMonth": "/month",
+    "billedYearly": "Billed ¥{price}/year",
+    "planLimits": "Plan Limits",
+    "planLimitsDesc": "Usage limits based on your current plan",
+    "limit": "Limit",
+    "summary": {
+      "title": "Billing Summary",
+      "nextBillingDate": "Next billing date",
+      "estimatedAmount": "Estimated amount",
+      "currentCycle": "Current billing cycle",
+      "to": "to"
+    },
+    "breakdown": {
+      "title": "Billing Breakdown",
+      "item": "Item",
+      "quantity": "Quantity",
+      "unitPrice": "Unit Price",
+      "subtotal": "Subtotal",
+      "planBase": "Base Plan",
+      "total": "Total",
+      "taxNote": "* Prices include tax"
+    },
+    "usage": {
+      "title": "Current Usage",
+      "servers": "Servers",
+      "deployments": "Deployments",
+      "requests": "Requests",
+      "of": "/ {max}",
+      "unlimited": "Unlimited"
+    },
+    "paymentMethod": {
+      "title": "Payment Method",
+      "card": "Card",
+      "endingIn": "**** {last4}",
+      "expires": "Expires",
+      "change": "Change payment method",
+      "noMethod": "No payment method on file"
+    },
+    "interval": {
+      "monthly": "Monthly",
+      "yearly": "Yearly",
+      "save": "Save 20%"
+    },
+    "limits": {
+      "mcpServers": "MCP Servers",
+      "deploymentsMonth": "Deployments/month",
+      "requestsMonth": "API Requests/month",
+      "teamMembers": "Team Members",
+      "logRetention": "Log Retention",
+      "customDomains": "Custom Domains",
+      "prioritySupport": "Priority Support",
+      "sso": "SSO/SAML",
+      "unlimited": "Unlimited",
+      "days": "{days} days"
+    },
+    "faq": {
+      "title": "Billing FAQ",
+      "cancelQuestion": "How do I cancel my subscription?",
+      "cancelAnswer": "Click 'Manage Subscription' to access the billing portal where you can cancel. You'll keep access until your billing period ends.",
+      "changeQuestion": "Can I change my plan?",
+      "changeAnswer": "Yes! You can upgrade or downgrade anytime. Upgrades are prorated. Downgrades take effect at the end of your current billing period.",
+      "paymentQuestion": "What payment methods are accepted?",
+      "paymentAnswer": "We accept major credit cards (Visa, Mastercard, American Express) through Stripe, our secure payment processor."
+    },
+    "success": {
+      "title": "Processing Payment...",
+      "description": "Your payment is being processed. This may take a moment.",
+      "checkBilling": "Waiting for confirmation...",
+      "goToDashboard": "Dashboard",
+      "goToBilling": "Go to Billing",
+      "completeTitle": "Payment Complete!",
+      "completeDescription": "Your subscription has been activated successfully.",
+      "redirecting": "Redirecting to billing page...",
+      "timeoutTitle": "Taking longer than expected",
+      "timeoutDescription": "Please check the billing page to confirm your subscription status."
+    },
+    "cancel": {
+      "title": "Payment Cancelled",
+      "description": "Your payment was cancelled. No charges were made.",
+      "help": "If you have questions or need assistance, please contact our support team.",
+      "backToBilling": "Back to Billing",
+      "viewPlans": "View Plans"
+    },
+    "plans": {
+      "free": {
+        "name": "Free",
+        "description": "For personal projects",
+        "features": ["Up to 3 servers", "50 deployments/month", "10,000 requests/month", "7-day log retention", "Community support"]
+      },
+      "pro": {
+        "name": "Pro",
+        "description": "For professional developers",
+        "features": ["Up to 20 servers", "500 deployments/month", "500,000 requests/month", "30-day log retention", "Custom domains", "Email support"]
+      },
+      "team": {
+        "name": "Team",
+        "description": "For teams and organizations",
+        "features": ["Up to 100 servers", "2,000 deployments/month", "5,000,000 requests/month", "90-day log retention", "Custom domains", "Up to 10 team members", "Priority support"]
+      },
+      "enterprise": {
+        "name": "Enterprise",
+        "description": "For large organizations",
+        "features": ["Unlimited servers", "Unlimited deployments", "Unlimited requests", "1-year log retention", "Custom domains", "Unlimited team members", "SSO/SAML", "Dedicated support", "SLA"]
+      }
+    }
+  },
+  "blog": {
+    "title": "Blog",
+    "subtitle": "Latest updates and technical insights",
+    "empty": "No articles yet",
+    "backToList": "Back to articles",
+    "author": "Author",
+    "readMore": "Read more articles",
+    "notFound": "Article not found"
+  },
+  "faqPage": {
+    "title": "FAQ",
+    "subtitle": "Frequently asked questions about Nodeflare.",
+    "notFound": "Can't find what you're looking for? Feel free to ",
+    "contactLink": "contact us",
+    "contactSuffix": ".",
+    "categories": {
+      "basic": "Basics",
+      "pricing": "Pricing",
+      "technical": "Technical",
+      "security": "Security"
+    },
+    "basic": {
+      "q1": "What is Nodeflare?",
+      "a1": "Nodeflare is a cloud hosting service for MCP servers. MCP servers allow AI assistants like Claude to access external tools and data. Simply connect your GitHub repository and builds and deployments happen automatically.",
+      "q2": "What is an MCP server?",
+      "a2": "An MCP (Model Context Protocol) server defines tools that AI assistants can use. For example, you can provide database queries, file operations, external API calls, and any other functionality to AI.",
+      "q3": "Which AI can I use this with?",
+      "a3": "Currently, we support Anthropic's Claude. You can use it with Claude Desktop, Claude.ai, or via API — any MCP-compatible environment."
+    },
+    "pricing": {
+      "q1": "What can I do with the free plan?",
+      "a1": "The free plan includes up to 3 servers and 10,000 requests per month. This is sufficient for personal use and small projects.",
+      "q2": "When should I upgrade to a paid plan?",
+      "a2": "Consider upgrading to Pro (¥2,980/month) if you need more than 4 servers, exceed 10,000 monthly requests, or require custom domains and priority support.",
+      "q3": "What payment methods are available?",
+      "a3": "We accept credit cards (Visa, Mastercard, American Express, JCB). Contact us if you need invoice billing."
+    },
+    "technical": {
+      "q1": "What programming languages are supported?",
+      "a1": "We support TypeScript/JavaScript, Python, Go, and Rust. Custom containers using Dockerfile are also available.",
+      "q2": "How long does deployment take?",
+      "a2": "Typically, deployment completes within 1-2 minutes after pushing to GitHub. The first build may take slightly longer due to dependency installation.",
+      "q3": "How do I set environment variables?",
+      "a3": "You can securely set environment variables from each server's settings page in the dashboard. Sensitive information like API keys and secrets are stored encrypted.",
+      "q4": "Can I use custom domains?",
+      "a4": "Custom domains are available on Pro plan and above. SSL certificates are automatically issued after DNS configuration."
+    },
+    "security": {
+      "q1": "How are access tokens managed?",
+      "a1": "You can issue access tokens for each server. Permissions can be set per token, and tokens can be revoked anytime when no longer needed.",
+      "q2": "Can I view access logs?",
+      "a2": "Yes, you can view logs for all tool invocations from the dashboard. This includes request content, responses, and execution times.",
+      "q3": "Where is data stored?",
+      "a3": "Servers run in the Tokyo region, and data is stored domestically in Japan."
+    }
+  },
+  "pricing": {
+    "title": "Pricing",
+    "subtitle": "Free for small projects. Scale as you grow.",
+    "monthly": "Monthly",
+    "yearly": "Yearly",
+    "yearlySave": "Save 17%",
+    "recommended": "Recommended",
+    "perMonth": "/mo",
+    "yearlyPrice": "Billed {price}/year",
+    "comparison": "Plan Comparison",
+    "feature": "Feature",
+    "unlimited": "Unlimited",
+    "days": "{days} days",
+    "startFree": "Start Free",
+    "contactUs": "Contact Us",
+    "startPlan": "Start {plan}",
+    "enterpriseCustomPricing": "Custom pricing based on your needs",
+    "features": {
+      "mcpServers": "MCP Servers",
+      "deploysMonth": "Deploys/month",
+      "requestsMonth": "Requests/month",
+      "teamMembers": "Team Members",
+      "logRetention": "Log Retention",
+      "customDomains": "Custom Domains",
+      "prioritySupport": "Priority Support",
+      "ssoSaml": "SSO/SAML"
+    },
+    "faq": {
+      "title": "FAQ",
+      "q1": "Is it easy to upgrade from the free plan?",
+      "a1": "Yes, you can upgrade with one click from your dashboard. Your data and settings will be preserved.",
+      "q2": "What payment methods are accepted?",
+      "a2": "We accept credit cards (Visa, Mastercard, American Express, JCB).",
+      "q3": "Can I cancel anytime?",
+      "a3": "Yes, you can cancel anytime. You'll continue to have access until the end of your billing period.",
+      "q4": "What happens if I exceed my request limit?",
+      "a4": "We'll notify you as you approach your limit. If exceeded, additional charges may apply or requests may be temporarily throttled.",
+      "q5": "How much do I save with yearly billing?",
+      "a5": "You save about 17% with yearly billing. For example, the Pro plan is ¥2,980/month, but with yearly billing it's about ¥2,483/month equivalent."
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "profile": {
+      "title": "Profile"
+    },
+    "account": {
+      "title": "Account",
+      "name": "Name",
+      "namePlaceholder": "Enter your name",
+      "githubConnection": "GitHub Connection",
+      "connectedAs": "Connected as @{name}",
+      "connected": "Connected",
+      "reconnect": "Reconnect",
+      "signOut": "Sign Out",
+      "signOutDesc": "Sign out from this device."
+    },
+    "notifications": {
+      "title": "Email Notifications",
+      "deploySuccess": "Deploy Success",
+      "deploySuccessDesc": "Notify via email when deployment succeeds",
+      "deployFailure": "Deploy Failure",
+      "deployFailureDesc": "Notify via email when deployment fails",
+      "serverDown": "Server Down",
+      "serverDownDesc": "Notify via email when server goes down",
+      "weeklyReport": "Weekly Report",
+      "weeklyReportDesc": "Receive weekly usage report via email"
+    },
+    "language": {
+      "title": "Language",
+      "description": "Select the display language for the application",
+      "japanese": "日本語",
+      "english": "English"
+    },
+    "danger": {
+      "title": "Danger Zone",
+      "deleteAccount": "Delete Account",
+      "deleteAccountDetail": "Permanently delete your account and all associated data. This action cannot be undone.",
+      "deleteConfirm": "Are you absolutely sure? This will permanently delete your account, all workspaces, servers, and deployments.",
+      "typeDelete": "Type DELETE to confirm:",
+      "permanentlyDelete": "Permanently Delete",
+      "deleting": "Deleting...",
+      "deleteFailed": "Failed to delete account. Please try again."
+    }
+  },
+  "auth": {
+    "callback": {
+      "signingIn": "Signing in",
+      "signingUp": "Creating account",
+      "loading": "Loading",
+      "error": "Authentication Error",
+      "returnHome": "Return to Home"
+    },
+    "settings": {
+      "title": "Authentication Settings",
+      "description": "Manage authentication methods for your MCP servers",
+      "accessTokens": {
+        "title": "Access Tokens",
+        "description": "Generate API keys to access MCP servers directly. Ideal for Claude Code, scripts, and custom clients.",
+        "badge": "Recommended"
+      },
+      "oauth": {
+        "title": "OAuth Apps",
+        "description": "Set up OAuth 2.0 authentication to integrate with external services like Claude custom connectors.",
+        "badge": "Claude Ready"
+      },
+      "info": {
+        "title": "Which should I choose?",
+        "description": "Use Access Tokens for direct programmatic access. Use OAuth for integration with AI clients like Claude.ai or ChatGPT."
+      },
+      "manage": "Manage"
+    },
+    "login": {
+      "title": "Login",
+      "email": "Email",
+      "password": "Password",
+      "submit": "Login",
+      "forgotPassword": "Forgot password?",
+      "noAccount": "Don't have an account?",
+      "signup": "Sign Up",
+      "withGithub": "Login with GitHub"
+    },
+    "signup": {
+      "title": "Sign Up",
+      "name": "Name",
+      "email": "Email",
+      "password": "Password",
+      "confirmPassword": "Confirm Password",
+      "submit": "Sign Up",
+      "hasAccount": "Already have an account?",
+      "login": "Login",
+      "withGithub": "Sign up with GitHub"
+    }
+  },
+  "errors": {
+    "required": "This field is required",
+    "invalidEmail": "Please enter a valid email address",
+    "passwordMin": "Password must be at least 8 characters",
+    "passwordMatch": "Passwords do not match",
+    "invalidSlug": "Only lowercase letters, numbers, and hyphens allowed",
+    "invalidGithubRepo": "Enter in owner/repo format",
+    "serverError": "Server error occurred. Please try again later.",
+    "networkError": "Network error occurred. Please check your connection.",
+    "unauthorized": "Authentication required. Please log in.",
+    "forbidden": "You don't have permission to perform this action.",
+    "notFound": "Resource not found.",
+    "invalidMcpRepository": "Not a valid MCP server repository. Requires MCP SDK dependency in package.json (Node.js) or requirements.txt/pyproject.toml (Python).",
+    "serverNotFound": "Server not found"
+  },
+  "contact": {
+    "title": "Contact Us",
+    "subtitle": "or use the form below",
+    "name": "Name",
+    "email": "Email",
+    "message": "Message",
+    "submit": "Send",
+    "submitting": "Sending...",
+    "successTitle": "Message Sent",
+    "successMessage": "We'll get back to you within 1-2 business days.",
+    "errors": {
+      "rateLimited": "Too many requests. Please try again later.",
+      "invalidEmail": "Please enter a valid email address.",
+      "messageTooShort": "Message must be at least 10 characters.",
+      "default": "Failed to send. Please try again."
+    }
+  },
+  "docs": {
+    "title": "NodeFlare User Guide",
+    "subtitle": "Learn how to use each screen and feature of NodeFlare.",
+    "sidebar": "Screen Guide",
+    "common": {
+      "features": "Screen Components",
+      "actions": "Actions"
+    },
+    "contact": {
+      "prompt": "Can't find what you're looking for?",
+      "link": "Contact Us →"
+    },
+    "sections": {
+      "dashboard": {
+        "title": "Dashboard",
+        "description": "The first screen displayed after login. View server status and announcements at a glance.",
+        "features": [
+          "Server Cards: View each server's status (Running/Stopped/Error) at a glance",
+          "Quick Actions: Restart or deploy servers with one click",
+          "Usage: Current month's request count, server count, etc.",
+          "Announcements: Important announcements from NodeFlare"
+        ],
+        "actions": [
+          "Click server card → Navigate to server details",
+          "\"New Server\" button → Navigate to server creation",
+          "Restart icon → Restart the server"
+        ]
+      },
+      "servers": {
+        "title": "Server List",
+        "description": "Displays all created MCP servers in a list.",
+        "features": [
+          "Server Name: Click to navigate to details",
+          "Status Badge: Running (green) / Stopped (gray) / Error (red) / Building (yellow)",
+          "Last Deploy: Most recent deployment date/time",
+          "Action Buttons: Quick actions like restart, stop, deploy"
+        ],
+        "actions": [
+          "\"New Server\" button → Navigate to server creation",
+          "Click server row → Navigate to server details",
+          "Workspace switcher → Switch between workspaces using the selector at the top"
+        ]
+      },
+      "serverNew": {
+        "title": "Create Server",
+        "description": "Screen for creating a new MCP server. Select a GitHub repository to deploy.",
+        "features": [
+          "Server Name (Required): Display name for management",
+          "Slug (Required): Identifier used in URL (lowercase letters and hyphens only)",
+          "GitHub Repository (Required): Select the repository to deploy from",
+          "Branch (Optional): Branch to deploy (default: main)",
+          "Root Directory (Optional): For monorepos, the directory containing server code"
+        ],
+        "actions": [
+          "Enter server name and slug",
+          "Click \"Select Repository\" to choose a GitHub repository",
+          "Change branch if needed",
+          "Click \"Create Server\" - build and deployment will start automatically"
+        ]
+      },
+      "serverDetail": {
+        "title": "Server Details",
+        "description": "Displays basic server information and current status. Includes Overview, Deployments, Test, Secrets, Webhooks, Metrics, and Settings tabs.",
+        "features": [
+          "Status: Current running state",
+          "Endpoint URL: URL for connecting from AI clients",
+          "Last Deploy: Most recent deployment date/time and commit hash",
+          "Available Tools: List of MCP tools provided by this server"
+        ],
+        "actions": [
+          "\"Copy\" button → Copy endpoint URL to clipboard",
+          "\"Deploy\" button → Execute manual deployment",
+          "\"Restart\" button → Restart the server",
+          "\"Stop\" button → Stop the server"
+        ]
+      },
+      "logs": {
+        "title": "Request Logs",
+        "description": "View MCP server request logs in real-time.",
+        "features": [
+          "Server Select: Switch which server to display",
+          "Search: Filter by tool name or response",
+          "Live Mode: Toggle auto-refresh ON/OFF (2-second interval)",
+          "Timeline: Visualize request time distribution"
+        ],
+        "actions": [
+          "Live button → Toggle auto-refresh ON/OFF",
+          "Refresh button → Manually refresh logs",
+          "Download button → Export logs as PDF"
+        ]
+      },
+      "accessTokens": {
+        "title": "Access Tokens",
+        "description": "Manage tokens used to access MCP servers. Tokens are displayed only once when created.",
+        "features": [
+          "Token Name: Identifier for management",
+          "Target Server: All servers or specific server",
+          "Scopes: Full Access / Tools / Resources / Prompts"
+        ],
+        "actions": [
+          "\"New Token\" button → Create new access token",
+          "Copy the displayed token and store it securely",
+          "Delete unused tokens"
+        ]
+      },
+      "oauth": {
+        "title": "OAuth Apps",
+        "description": "Manage OAuth clients for external applications to access MCP servers.",
+        "features": [
+          "App Name: Name of the OAuth client",
+          "Redirect URIs: Multiple redirect URIs can be registered",
+          "Client ID: Used in OAuth authorization requests",
+          "Client Secret: Used for authentication at token endpoint"
+        ],
+        "actions": [
+          "\"New Client\" button → Create new OAuth client",
+          "Register redirect URIs and allowed scopes",
+          "Client ID and Client Secret will be issued"
+        ]
+      },
+      "team": {
+        "title": "Team Members",
+        "description": "Invite members to your workspace to collaboratively manage servers.",
+        "features": [
+          "Member Count: Current member count and limit",
+          "Member List: Each member's name, email, and role",
+          "Roles: Owner / Admin / Member / Viewer"
+        ],
+        "actions": [
+          "\"Add Member\" button → Invite new member by email",
+          "Select role for the invited member",
+          "Change role via dropdown (except for owner)",
+          "\"Delete\" button → Remove member from workspace"
+        ]
+      },
+      "billing": {
+        "title": "Billing",
+        "description": "Manage subscriptions and view billing information.",
+        "features": [
+          "Current Plan: Plan name, price, and next billing date",
+          "Usage: Server count, request count, etc.",
+          "Payment Methods: Credit card registration and management",
+          "Billing History: List of past invoices"
+        ],
+        "actions": [
+          "\"Change Plan\" button → Upgrade or downgrade subscription",
+          "Register or change credit card",
+          "Download PDF receipts for each invoice"
+        ]
+      },
+      "settings": {
+        "title": "User Settings",
+        "description": "Manage account settings and notification preferences.",
+        "features": [
+          "Profile: Display name and email",
+          "Language: Japanese / English",
+          "Notifications: Deploy success/failure, server down, weekly report"
+        ],
+        "actions": [
+          "Change display name and email",
+          "Toggle notification settings ON/OFF",
+          "Sign out or delete account"
+        ]
+      }
+    }
+  },
+  "commercePage": {
+    "title": "Specified Commercial Transactions Act Disclosure",
+    "seller": "Seller",
+    "sellerValue": "Nodeflare",
+    "operator": "Responsible Person",
+    "operatorValue": "Shunya Sekiguchi",
+    "address": "Address",
+    "addressValue": "180-7 Kamitoyooka-machi, Takasaki-shi, Gunma, Japan",
+    "phone": "Phone Number",
+    "phoneValue": "+81-70-1390-0619",
+    "contact": "Contact",
+    "contactValue": "Please contact us via",
+    "contactLink": "contact form",
+    "price": "Price",
+    "priceValue": "Prices shown on (tax included)",
+    "priceLink": "pricing page",
+    "payment": "Payment Method",
+    "paymentValue": "Credit Card (VISA, Mastercard, American Express, JCB)",
+    "paymentTiming": "Payment Timing",
+    "paymentTimingValue": "At service start and contract renewal",
+    "serviceDelivery": "Service Delivery",
+    "serviceDeliveryValue": "Available immediately after payment completion",
+    "cancellation": "Refund & Cancellation",
+    "cancellationValue1": "Due to the nature of digital services, refunds cannot be provided after service delivery.",
+    "cancellationValue2": "Subscriptions can be cancelled at any time. After cancellation, you can continue using the service until the end of the current billing period.",
+    "cancellationValue3": "Full refunds are available within 7 days of initial purchase.",
+    "environment": "System Requirements",
+    "environmentInternet": "Internet connection",
+    "environmentBrowser": "Modern browser (latest versions of Chrome, Firefox, Safari, Edge)",
+    "other": "Other",
+    "otherValue1": "For other matters, please refer to our",
+    "otherTermsLink": "Terms of Service",
+    "otherValue1End": ".",
+    "otherValue2": "Prices may change without notice. Customers who contracted before a change will retain the previous price for their current contract period."
+  },
+  "apiErrors": {
+    "SLUG_ALREADY_EXISTS": "This slug is already in use. Please enter a different slug.",
+    "DUPLICATE_ENTRY": "A server with the same details already exists.",
+    "INVALID_SLUG": "Slug can only contain lowercase letters, numbers, and hyphens. It cannot start or end with a hyphen.",
+    "INVALID_REPOSITORY": "Repository format is invalid. Please enter in 'username/repository' format (e.g., username/my-repo).",
+    "INVALID_GITHUB_REPO": "GitHub repository format is invalid. Please enter in owner/repo format.",
+    "INVALID_RUNTIME": "The selected runtime is invalid. Please choose from Node.js, Python, Go, or Rust.",
+    "INVALID_TRANSPORT": "Transport type is invalid. Please choose SSE or STDIO.",
+    "INVALID_WORKSPACE": "The specified workspace does not exist or you don't have access.",
+    "INVALID_MCP_REPOSITORY": "This repository could not be recognized as an MCP server. Please check that MCP SDK dependencies are properly configured.",
+    "REPO_NOT_FOUND": "The specified repository was not found. Please check if the repository exists and is accessible.",
+    "NOT_MCP_REPOSITORY": "This repository does not appear to be an MCP server. Please check if MCP SDK is properly configured.",
+    "SERVER_LIMIT_REACHED": "You have reached your plan's server limit. Please upgrade to add more servers.",
+    "DEPLOYMENT_LIMIT_REACHED": "You have reached this month's deployment limit. Please upgrade to continue deploying.",
+    "SERVER_NOT_RUNNING": "The server is not running. Please deploy it first.",
+    "NO_ENDPOINT": "The server endpoint is not yet configured. Please wait for deployment to complete.",
+    "VALIDATION_ERROR": "There are errors in your input. Please check and try again.",
+    "INTERNAL_ERROR": "An error occurred while processing. Please check your input and try again.",
+    "NOT_FOUND": "The requested resource was not found.",
+    "FORBIDDEN": "You don't have permission to perform this action.",
+    "UNAUTHORIZED": "Login is required. Please log in again.",
+    "USER_NOT_REGISTERED": "This email is not registered. The user must sign up with GitHub first.",
+    "default": "An error occurred. Please try again."
+  },
+  "footer": {
+    "tagline": "MCP Dedicated Hosting",
+    "product": "Product",
+    "docs": "Docs",
+    "pricing": "Pricing",
+    "blog": "Blog",
+    "support": "Support",
+    "faq": "FAQ",
+    "contact": "Contact",
+    "legal": "Legal",
+    "terms": "Terms of Service",
+    "privacy": "Privacy Policy",
+    "commerce": "Commerce Act Disclosure",
+    "copyright": "© {year} Nodeflare. All rights reserved."
+  }
+}

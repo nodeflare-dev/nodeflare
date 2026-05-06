@@ -1,0 +1,1320 @@
+{
+  "common": {
+    "loading": "読み込み中...",
+    "error": "エラーが発生しました",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "delete": "削除",
+    "edit": "編集",
+    "create": "作成",
+    "confirm": "確認",
+    "back": "戻る",
+    "next": "次へ",
+    "submit": "送信",
+    "close": "閉じる",
+    "search": "検索",
+    "filter": "フィルター",
+    "all": "すべて",
+    "none": "なし",
+    "yes": "はい",
+    "no": "いいえ",
+    "add": "追加",
+    "copy": "コピー",
+    "dismiss": "閉じる",
+    "change": "変更",
+    "enabled": "有効",
+    "disabled": "無効",
+    "previous": "前へ",
+    "showing": "{from}から{to}件を表示（全{total}件）",
+    "notFound": "見つかりませんでした",
+    "retry": "再試行",
+    "copied": "コピーしました！"
+  },
+  "nav": {
+    "home": "ホーム",
+    "dashboard": "ダッシュボード",
+    "servers": "サーバー管理",
+    "auth": "認証設定",
+    "accessTokens": "アクセストークン",
+    "vpn": "VPN接続",
+    "team": "チームメンバー",
+    "logs": "ログ履歴",
+    "settings": "アカウント設定",
+    "docs": "ドキュメント",
+    "blog": "ブログ",
+    "faq": "FAQ",
+    "contact": "お問い合わせ",
+    "login": "ログイン",
+    "logout": "ログアウト",
+    "signup": "新規登録",
+    "overview": "ダッシュボード",
+    "billing": "プランと請求"
+  },
+  "home": {
+    "title": "MCP専用ホスティング - Nodeflare",
+    "heroTitle1": "MCP専用",
+    "heroTitle2": "ホスティング",
+    "heroDescription1": "GitHubのstdio形式MCPをSSE形式に自動変換。",
+    "heroDescription2": "URLを指定するだけで即デプロイ。",
+    "heroDescription3": "権限制御やアクセスログをダッシュボードで一元管理。",
+    "heroDescription4": "ほとんどの機能が無料。",
+    "startWithGithub": "GitHubで始める",
+    "dashboard": {
+      "screenTitle": "ダッシュボード画面",
+      "servers": "サーバー",
+      "serversRunning": "稼働中のサーバー",
+      "platformStats": "プラットフォーム統計",
+      "liveData": "リアルタイムデータ",
+      "totalServers": "総サーバー数",
+      "runningServers": "稼働中",
+      "totalWorkspaces": "ワークスペース",
+      "newServer": "新規作成",
+      "requests": "リクエスト",
+      "uptime": "稼働率",
+      "status": {
+        "running": "稼働中",
+        "deploying": "デプロイ中"
+      },
+      "slideLabels": {
+        "dashboard": "ダッシュボード",
+        "servers": "サーバー一覧",
+        "serverDetail": "サーバー詳細",
+        "auth": "認証設定",
+        "logs": "リクエストログ"
+      }
+    },
+    "features": {
+      "badge": "なぜNodeflare？",
+      "title": "Nodeflareでできること",
+      "zeroConfig": {
+        "title": "stdio→SSE自動変換",
+        "desc": "GitHubで公開されているstdio形式のMCPを、URLを指定するだけでSSE形式に自動変換。フォーク不要で即デプロイ"
+      },
+      "acl": {
+        "title": "細かな権限制御",
+        "desc": "アクセストークンごとに「どのツールを呼べるか」をメソッドレベルで制御。OAuthにも対応"
+      },
+      "secrets": {
+        "title": "シークレット管理",
+        "desc": "環境変数を暗号化保存。チームで安全に共有"
+      },
+      "protocol": {
+        "title": "アクセスログで監査",
+        "desc": "誰がいつ何を呼び出したかを記録。SSE形式だからこそ実現できる完全なアクセスログ"
+      },
+      "alwaysOn": {
+        "title": "社内MCPの情報漏洩を防止",
+        "desc": "stdioだと誰が叩いたかわからない。SSE形式ならトークン単位でログが残り、外部流出を即座に検知"
+      }
+    },
+    "devExperience": {
+      "badge": "Access Control",
+      "title": "認証・認可の実装は\n不要です",
+      "description": "MCPサーバーに認証処理を書く必要はありません。Nodeflareがトークン認証・ツール単位の権限制御・監査ログを代わりに処理します。",
+      "tokenAuth": "Bearer Token / OAuth 2.0 を自動付与",
+      "toolPermission": "tools/call をメソッド単位で許可・拒否",
+      "accessLog": "リクエスト単位で監査ログを自動記録",
+      "noCode": "MCP側のコード変更は一切不要",
+      "codeComment": "Notionのページを検索"
+    },
+    "pricing": {
+      "badge": "料金プラン",
+      "title": "ほとんどの機能が無料",
+      "subtitle": "個人利用なら無料で十分。本番運用にはProプランを。",
+      "perMonth": "/月",
+      "free": {
+        "name": "Free",
+        "price": "¥0",
+        "description": "個人開発や検証に最適",
+        "feature1": "サーバー3つまで",
+        "feature2": "月間10,000リクエスト",
+        "feature3": "ログ7日間保持",
+        "feature4": "コミュニティサポート",
+        "cta": "無料で始める"
+      },
+      "pro": {
+        "name": "Pro",
+        "price": "¥2,980",
+        "badge": "おすすめ",
+        "description": "本番運用に必要な全機能",
+        "feature1": "サーバー20個まで",
+        "feature2": "月間500,000リクエスト",
+        "feature3": "カスタムドメイン",
+        "feature4": "ログ30日間保持",
+        "feature5": "メールサポート",
+        "cta": "Proを始める"
+      }
+    },
+    "blog": {
+      "badge": "ブログ",
+      "title": "ブログ",
+      "viewAll": "すべて見る",
+      "viewAllArticles": "すべての記事を見る",
+      "readMore": "詳細を見る"
+    },
+    "faq": {
+      "badge": "FAQ",
+      "title": "よくある質問",
+      "subtitle": "はじめての方からよく寄せられる質問",
+      "viewAll": "すべての質問を見る",
+      "q1": {
+        "question": "Nodeflareとは何ですか？",
+        "answer": "MCP専用のホスティングサービスです。GitHubで公開されているstdio形式のMCPサーバーをSSE形式に自動変換してデプロイできます。アクセストークンの細かな権限制御やOAuthにも対応し、ほとんどの機能は無料で使えます。"
+      },
+      "q2": {
+        "question": "stdioとSSEの違いは何ですか？",
+        "answer": "stdioはローカル実行用の形式で、誰がいつ呼び出したかのログが残りません。SSE形式ならHTTP経由でアクセスするため、全リクエストのログが残り、アクセストークンごとの権限制御も可能です。社内MCPの外部流出防止にも効果的です。"
+      },
+      "q3": {
+        "question": "企業で使うメリットは？",
+        "answer": "SSE形式にすることで「誰が・いつ・どのツールを呼んだか」が完全に記録されます。stdioでは不可能だった監査ログの取得により、社内MCPが外部に流出した場合も即座に検知・対応できます。"
+      }
+    },
+    "contact": {
+      "badge": "お問い合わせ",
+      "title": "お問い合わせ",
+      "subtitle": "ご質問やご相談がありましたらお気軽にどうぞ",
+      "name": "お名前",
+      "email": "メールアドレス",
+      "message": "メッセージ",
+      "namePlaceholder": "山田 太郎",
+      "emailPlaceholder": "example@email.com",
+      "messagePlaceholder": "お問い合わせ内容をご記入ください",
+      "cancel": "キャンセル",
+      "submit": "送信する",
+      "sending": "送信中...",
+      "successTitle": "送信完了",
+      "successMessage": "お問い合わせを受け付けました。担当者より折り返しご連絡いたします。",
+      "errors": {
+        "invalidEmail": "有効なメールアドレスを入力してください",
+        "messageTooShort": "メッセージは10文字以上で入力してください",
+        "messageTooLong": "メッセージは5000文字以内で入力してください"
+      }
+    }
+  },
+  "dashboard": {
+    "title": "ダッシュボード",
+    "welcome": "おかえりなさい",
+    "overview": "概要",
+    "recentActivity": "最近のアクティビティ",
+    "quickActions": "クイックアクション",
+    "noServers": "サーバーがありません",
+    "createFirstServer": "最初のサーバーを作成",
+    "newServer": "新規サーバー",
+    "totalServers": "サーバー数",
+    "running": "稼働中",
+    "runningCount": "{running} / {total} 稼働中",
+    "requests": "リクエスト",
+    "requestsLabel": "{count} リクエスト",
+    "errors": "エラー",
+    "errorsLabel": "{count} エラー",
+    "requests7d": "リクエスト (7日間)",
+    "errors7d": "エラー (7日間)",
+    "recentServers": "最近のサーバー",
+    "serverName": "サーバー",
+    "repository": "リポジトリ",
+    "status": "ステータス",
+    "runtime": "ランタイム",
+    "servers": "サーバー",
+    "viewAll": "すべて見る →",
+    "planUsage": "プラン利用状況",
+    "manage": "管理 →",
+    "videos": "動画",
+    "video1Title": "Nodeflare紹介",
+    "video2Title": "MCPサーバーのデプロイ",
+    "blog": "ブログ",
+    "serversLoadError": "サーバーの読み込みに失敗しました",
+    "retry": "再試行"
+  },
+  "servers": {
+    "title": "サーバー",
+    "accessMode": {
+      "title": "アクセスモード",
+      "description": "このサーバーへのアクセス方法を制御します",
+      "public": "パブリック",
+      "vpn_only": "VPNのみ"
+    },
+    "authEnabled": {
+      "title": "NodeFlare認証",
+      "description": "オフにすると、NodeFlareの認証レイヤーをスキップします。MCPサーバー側で独自の認証を行う場合に使用してください。",
+      "on": "有効",
+      "off": "無効"
+    },
+    "new": "新規サーバー",
+    "list": "サーバー一覧",
+    "empty": "サーバーがまだありません",
+    "createFirst": "最初のサーバーを作成",
+    "loadError": "サーバーの読み込みに失敗しました",
+    "retry": "再試行",
+    "repo": "リポジトリ",
+    "runtime": "ランタイム",
+    "visibility": "公開設定",
+    "usage": "{current} / {max} サーバー",
+    "upgrade": {
+      "title": "アップグレードが必要です",
+      "serverLimit": "プランのサーバー上限に達しました。新しいサーバーを作成するにはアップグレードしてください。",
+      "deployLimit": "今月のデプロイ上限に達しました。デプロイを続けるにはアップグレードしてください。",
+      "cta": "プランを見る"
+    },
+    "create": {
+      "title": "新規サーバーを作成",
+      "firstTitle": "最初のサーバーを作成",
+      "welcome": "Nodeflareへようこそ",
+      "welcomeDesc": "MCPサーバーを数秒でデプロイできます。GitHubリポジトリを接続するだけで、残りはお任せください。",
+      "configuration": "サーバー設定",
+      "name": "サーバー名",
+      "namePlaceholder": "my-mcp-server",
+      "slug": "スラッグ",
+      "slugPlaceholder": "my-server",
+      "slugHelp": "URLに使用される識別子（小文字とハイフンのみ）",
+      "description": "説明",
+      "descriptionPlaceholder": "サーバーの説明を入力",
+      "descriptionBrief": "サーバーの簡単な説明",
+      "githubRepo": "GitHubリポジトリ",
+      "githubRepoPlaceholder": "owner/repo",
+      "githubRepoHelp": "owner/repo形式で入力してください",
+      "searchRepos": "リポジトリを検索...",
+      "loadingRepos": "リポジトリを読み込み中...",
+      "noRepos": "リポジトリが見つかりません",
+      "noDescription": "説明なし",
+      "myRepos": "自分のリポジトリ",
+      "myReposDesc": "GitHubアカウントから選択",
+      "publicUrl": "公開リポジトリ",
+      "publicUrlDesc": "URLまたはowner/repoを入力",
+      "publicUrlHelp": "公開されているGitHubリポジトリを直接デプロイできます。フォーク不要です。",
+      "private": "プライベート",
+      "branch": "ブランチ",
+      "branchPlaceholder": "main",
+      "advancedSettings": "詳細設定",
+      "rootDirectory": "ルートディレクトリ",
+      "rootDirectoryHelp": "モノレポの場合、MCPサーバーのコードがあるサブディレクトリを指定してください",
+      "mcpPath": "MCPエンドポイントパス",
+      "mcpPathHelp": "MCPサーバーがリッスンするHTTPパス（例: /mcp, /sse, /）",
+      "mcpPathAutoStdio": "STDIOトランスポートの場合は /mcp に自動設定されます",
+      "entryCommand": "起動コマンド",
+      "entryCommandHelp": "サーバーを起動するコマンド（例: python server.py, uv run mcp-server）。空の場合はプロジェクト構成から自動検出されます。",
+      "authEnabled": "NodeFlare認証を有効にする",
+      "authEnabledHelp": "オフにすると、NodeFlareの認証レイヤーをスキップします。MCPサーバー側で独自の認証を行う場合（Notion APIなど）に使用してください。",
+      "authDisabledWarning": "認証が無効になっています。MCPサーバー側で認証を処理していることを確認してください。",
+      "transport": "トランスポート",
+      "transportHelp": "MCPサーバーの通信方式（SSE: HTTPサーバー、STDIO: stdin/stdout通信）",
+      "transportSseDesc": "HTTP/SSEエンドポイント",
+      "transportStdioDesc": "stdin/stdout（自動変換）",
+      "runtime": "ランタイム",
+      "runtimeNode": "Node.js",
+      "runtimePython": "Python",
+      "runtimeGo": "Go",
+      "runtimeRust": "Rust",
+      "runtimeDocker": "Docker",
+      "visibility": "公開設定",
+      "visibilityPublic": "公開",
+      "visibilityPrivate": "非公開",
+      "visibilityTeam": "チーム",
+      "region": "リージョン",
+      "regionHelp": "サーバーをデプロイするリージョンを選択してください",
+      "submit": "サーバーを作成",
+      "creating": "作成中...",
+      "failed": "サーバーの作成に失敗しました",
+      "trySuggestion": "スラッグを試す:"
+    },
+    "regions": {
+      "title": "リージョン",
+      "iad": "バージニア (US East)"
+    },
+    "detail": {
+      "overview": "概要",
+      "deployments": "デプロイメント",
+      "logs": "ログ",
+      "settings": "設定",
+      "secrets": "シークレット",
+      "tools": "ツール",
+      "endpoint": "エンドポイント",
+      "copyEndpoint": "クリックでエンドポイントURLをコピー",
+      "status": "ステータス",
+      "runtime": "ランタイム",
+      "lastDeployed": "最終デプロイ",
+      "deploy": "デプロイ",
+      "deploying": "デプロイ中...",
+      "deployUsage": "{current} / {max} デプロイ（今月）",
+      "stop": "停止",
+      "restart": "再起動",
+      "deleteServer": "サーバーを削除",
+      "deleteConfirm": "このサーバーを削除してもよろしいですか？",
+      "deleteWarning": "この操作は取り消せません。すべてのデプロイメント、設定、シークレットが削除されます。",
+      "deleteConfirmLabel": "確認のため、サーバー名を入力してください",
+      "repository": "リポジトリ",
+      "publicUrl": "公開URL (サブドメイン)",
+      "publicUrlDesc": "Claude、ChatGPT、その他のAIクライアントから接続するにはこのURLを使用してください",
+      "noDeployments": "デプロイメントがまだありません",
+      "pending": "保留中",
+      "noTools": "ツールが検出されていません。サーバーをデプロイしてツールを検出してください。",
+      "addSecret": "シークレットを追加",
+      "keyPlaceholder": "KEY",
+      "valuePlaceholder": "Value",
+      "noSecrets": "シークレットが設定されていません",
+      "serverSettings": "サーバー設定",
+      "settingsComingSoon": "設定機能は近日公開予定です。",
+      "save": "保存する",
+      "viewLogs": "ログを見る",
+      "copySha": "SHAをコピー",
+      "justNow": "たった今",
+      "minutesAgo": "分前",
+      "hoursAgo": "時間前",
+      "daysAgo": "日前",
+      "weeksAgo": "週間前",
+      "noCommitMessage": "コミットメッセージなし",
+      "deployInfo": "今月のデプロイ",
+      "deployInfoDesc": "現在のプランでは月{max}回までデプロイできます。",
+      "deployInfoUnlimited": "現在のプランでは無制限にデプロイできます。",
+      "pullAndDeploy": "Pull & Deploy",
+      "viewPlan": "プランを確認 →",
+      "buildLogs": "ビルドログ",
+      "buildOutput": "ビルド出力",
+      "live": "ライブ",
+      "linesCount": "{count}行",
+      "pressEscToExit": "ESCで終了",
+      "follow": "フォロー",
+      "fullscreen": "フルスクリーン",
+      "exitFullscreen": "フルスクリーン終了 (ESC)",
+      "clickToViewLogs": "クリックでログを表示",
+      "deploys": "デプロイ"
+    },
+    "deploy": {
+      "started": "デプロイを開始しました...",
+      "success": "デプロイが完了しました！",
+      "failed": "デプロイに失敗しました"
+    },
+    "webhooks": {
+      "title": "Webhooks",
+      "add": "Webhookを追加",
+      "name": "名前",
+      "url": "Webhook URL (HTTPS必須)",
+      "urlPlaceholder": "https://hooks.slack.com/services/...",
+      "namePlaceholder": "My Slack Webhook",
+      "type": "タイプ",
+      "typeCustom": "カスタム",
+      "typeSlack": "Slack",
+      "typeDiscord": "Discord",
+      "events": "通知するタイミング",
+      "eventDeploySuccess": "デプロイ成功",
+      "eventDeploySuccessDesc": "デプロイが成功した時に通知",
+      "eventDeployFailure": "デプロイ失敗",
+      "eventDeployFailureDesc": "デプロイが失敗した時に通知",
+      "eventDeployStarted": "デプロイ開始",
+      "eventDeployStartedDesc": "デプロイが開始された時に通知",
+      "secret": "シークレット",
+      "secretPlaceholder": "署名用のシークレット（任意）",
+      "empty": "Webhookが設定されていません",
+      "emptyDesc": "デプロイ完了時に通知を受け取るにはWebhookを追加してください",
+      "test": "テスト",
+      "testing": "テスト中",
+      "testingWebhook": "{name} をテスト中...",
+      "testSuccess": "{name} のテストが成功しました",
+      "testError": "{name} のテストに失敗しました",
+      "createSuccess": "Webhookを作成しました",
+      "createError": "Webhookの作成に失敗しました",
+      "deleteSuccess": "Webhookを削除しました",
+      "delete": "削除",
+      "deleteConfirm": "このWebhookを削除しますか？",
+      "lastTriggered": "最終実行: {date}",
+      "success": "成功",
+      "failure": "失敗"
+    },
+    "test": {
+      "title": "接続テスト",
+      "description": "MCPサーバーが正常に応答しているかテストします",
+      "runTest": "テストを実行",
+      "runTestAgain": "再テスト",
+      "checking": "接続を確認中...",
+      "connectionStatus": "接続状態",
+      "refresh": "再確認",
+      "statusHealthy": "正常に動作中",
+      "statusNotDeployed": "未デプロイ",
+      "statusUnreachable": "接続不可",
+      "statusError": "エラー",
+      "testTools": "ツールをテスト",
+      "selectTool": "ツールを選択",
+      "chooseTool": "ツールを選んでください",
+      "inputSchema": "入力スキーマ",
+      "arguments": "引数 (JSON)",
+      "execute": "実行",
+      "executing": "実行中...",
+      "resultSuccess": "成功",
+      "resultError": "エラー",
+      "testing": "接続をテスト中...",
+      "testSuccess": "接続テストに成功しました",
+      "testFailed": "接続テストに失敗しました",
+      "noTools": "利用可能なツールがありません",
+      "showMore": "もっと見る",
+      "showLess": "閉じる"
+    },
+    "metrics": {
+      "title": "メトリクス",
+      "serverNotRunning": "サーバーが起動していません",
+      "deployFirst": "メトリクスを表示するにはまずサーバーをデプロイしてください",
+      "loadError": "メトリクスの読み込みに失敗しました",
+      "retry": "再試行",
+      "refresh": "更新",
+      "memory": "メモリ",
+      "cpu": "CPU",
+      "cpuUsage": "CPU使用率",
+      "network": "ネットワーク",
+      "networkIn": "ネットワーク受信",
+      "networkOut": "ネットワーク送信",
+      "inbound": "受信トラフィック",
+      "outbound": "送信トラフィック",
+      "infoTitle": "メトリクスは30秒ごとに更新されます",
+      "infoDescription": "過去1時間のデータが表示されます。メモリとCPUはリアルタイム、ネットワークは秒間レートです。",
+      "cpuHistory": "CPU使用率履歴",
+      "memoryHistory": "メモリ使用量履歴",
+      "networkHistory": "ネットワークI/O履歴",
+      "memoryUsed": "使用中",
+      "memoryTotal": "合計",
+      "noData": "データがありません"
+    },
+    "status": {
+      "running": "実行中",
+      "stopped": "停止",
+      "inactive": "非アクティブ",
+      "building": "ビルド中",
+      "deploying": "デプロイ中",
+      "failed": "失敗",
+      "pending": "保留中",
+      "success": "成功",
+      "succeeded": "成功"
+    },
+    "oauth": {
+      "title": "Claude 接続設定 (OAuth)",
+      "description": "Claude Desktop や Claude.ai からこのサーバーに接続するための認証情報です。",
+      "regenerate": "シークレットを再生成",
+      "newSecretWarning": "新しいシークレットが生成されました。この値は一度だけ表示されます。安全な場所にコピーしてください。",
+      "copyAndDismiss": "コピーして閉じる",
+      "secretNote": "シークレットは一度だけ表示されます。紛失した場合は再生成してください。",
+      "notFound": "OAuth情報が見つかりません"
+    }
+  },
+  "oauth": {
+    "title": "OAuth アプリ",
+    "backToAuth": "認証設定に戻る",
+    "new": "新規アプリ",
+    "yourApps": "あなたのOAuthアプリ",
+    "empty": {
+      "title": "OAuthアプリがありません",
+      "description": "OAuthアプリを作成して、Claude.aiやその他のOAuth対応クライアントからMCPサーバーに接続できるようにしましょう。"
+    },
+    "list": {
+      "created": "作成日:",
+      "createdSuffix": "に作成"
+    },
+    "created": {
+      "title": "OAuthアプリが作成されました",
+      "warning": "Client Secretは一度だけ表示されます。安全な場所に保存してください。",
+      "dismiss": "確認しました"
+    },
+    "delete": {
+      "title": "削除",
+      "confirm": "このOAuthアプリを削除しますか？このアプリを使用しているクライアントは接続できなくなります。"
+    },
+    "create": {
+      "title": "新規OAuthアプリを作成",
+      "name": "アプリ名",
+      "namePlaceholder": "My Claude Connector",
+      "server": "対象サーバー",
+      "selectServer": "サーバーを選択...",
+      "searchServers": "サーバーを検索...",
+      "allServers": "すべてのサーバー",
+      "serverHint": "このワークスペースのすべてのサーバーにアクセス可能",
+      "noServersFound": "サーバーが見つかりません",
+      "noServersAvailable": "サーバーがありません",
+      "redirectUri": "リダイレクトURI",
+      "redirectUriHelp": "Claudeカスタムコネクタの場合: https://claude.ai/api/mcp/auth_callback",
+      "submit": "アプリを作成",
+      "creating": "作成中..."
+    },
+    "scopes": {
+      "title": "権限（スコープ）",
+      "fullAccess": "フルアクセス",
+      "toolsDesc": "ツールの実行",
+      "resourcesDesc": "リソースへのアクセス",
+      "promptsDesc": "プロンプトへのアクセス",
+      "selected": "選択されたスコープ"
+    },
+    "customScope": "カスタムスコープ（オプション）",
+    "customScopeExamples": "例: tools:call:get_weather, resources:read:file://data",
+    "app": {
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "redirectUris": "リダイレクトURI",
+      "createdAt": "作成日",
+      "copyClientId": "Client IDをコピー",
+      "regenerateSecret": "シークレットを再生成",
+      "delete": "削除",
+      "deleteConfirm": "このOAuthアプリを削除しますか？このアプリを使用しているクライアントは接続できなくなります。"
+    }
+  },
+  "accessTokens": {
+    "title": "アクセストークン",
+    "backToAuth": "認証設定に戻る",
+    "new": "新規トークン",
+    "empty": "アクセストークンがまだありません",
+    "loadError": "アクセストークンの読み込みに失敗しました",
+    "yourKeys": "あなたのアクセストークン",
+    "created": "アクセストークンが作成されました",
+    "createdWarning": "このトークンは一度だけ表示されます。安全な場所に保存してください。",
+    "revoke": "取り消し",
+    "revokeConfirm": "このアクセストークンを取り消しますか？この操作は元に戻せません。",
+    "customScope": "カスタムスコープ（オプション）",
+    "customScopeExamples": "例: tools:call:get_weather, resources:read:file://data",
+    "rateLimit": "レート制限（リクエスト/時間）",
+    "rate": "レート: {rate}/時間",
+    "lastUsed": "最終使用: {date}",
+    "create": {
+      "title": "新規アクセストークンを作成",
+      "name": "トークン名",
+      "namePlaceholder": "my-access-token",
+      "server": "対象サーバー",
+      "selectServer": "サーバーを選択...",
+      "allServers": "すべてのサーバー",
+      "serverHint": "特定のサーバーを選択するか、ワークスペース内のすべてのサーバーにアクセスできるトークンを作成します",
+      "searchServers": "サーバーを検索...",
+      "submit": "トークンを作成",
+      "creating": "作成中..."
+    },
+    "scopes": {
+      "title": "スコープ（権限）",
+      "selected": "選択されたスコープ",
+      "all": "すべて",
+      "toolsDesc": "ツールの実行",
+      "resourcesDesc": "リソースの読み取り",
+      "promptsDesc": "プロンプトの取得",
+      "fullAccess": "フルアクセス",
+      "fullAccessDesc": "すべての権限（ツール、リソース、プロンプト）",
+      "toolsAll": "ツール - すべて",
+      "toolsAllDesc": "ツールの一覧取得と呼び出し",
+      "toolsList": "ツール - 一覧のみ",
+      "toolsListDesc": "利用可能なツールの一覧のみ",
+      "toolsCall": "ツール - 呼び出し",
+      "toolsCallDesc": "任意のツールを呼び出し可能（一覧含む）",
+      "resourcesAll": "リソース - すべて",
+      "resourcesAllDesc": "リソースの一覧取得と読み取り",
+      "resourcesList": "リソース - 一覧のみ",
+      "resourcesListDesc": "リソースの一覧のみ",
+      "resourcesRead": "リソース - 読み取り",
+      "resourcesReadDesc": "任意のリソースを読み取り可能",
+      "promptsAll": "プロンプト - すべて",
+      "promptsAllDesc": "プロンプトの一覧取得と取得",
+      "promptsList": "プロンプト - 一覧のみ",
+      "promptsListDesc": "プロンプトの一覧のみ",
+      "promptsGet": "プロンプト - 取得",
+      "promptsGetDesc": "任意のプロンプト内容を取得可能",
+      "noPermissions": "権限なし"
+    }
+  },
+  "vpn": {
+    "title": "VPN接続",
+    "description": "WireGuard VPNでMCPサーバーに安全に接続",
+    "createConnection": "新規作成",
+    "activeConnections": "接続一覧",
+    "configGenerated": "設定が生成されました",
+    "importantNote": "重要:",
+    "configOnlyOnce": "この設定にはプライベートキーが含まれており、一度しか表示されません。今すぐダウンロードまたはコピーしてください。",
+    "peerName": "ピア名",
+    "peerIP": "ピアIP",
+    "download": "ダウンロード",
+    "connectionName": "接続名",
+    "connectionNamePlaceholder": "my-laptop",
+    "connectionNameHint": "デバイスを識別する名前（例：my-laptop、work-pc）",
+    "region": "リージョン",
+    "creating": "作成中...",
+    "create": "作成",
+    "createError": "VPN接続の作成に失敗しました。もう一度お試しください。",
+    "wireGuardInfo": "VPN接続にはWireGuardが必要です。以下からダウンロード：",
+    "deleteConfirmTitle": "接続を削除",
+    "deleteConfirmMessage": "「{name}」を削除しますか？この操作は取り消せません。"
+  },
+  "logs": {
+    "title": "ログ",
+    "requestLogs": "リクエストログ",
+    "recentRequests": "最近のリクエスト",
+    "empty": "ログがありません",
+    "noLogs": "リクエストログがまだありません",
+    "loadError": "ログの読み込みに失敗しました",
+    "realtime": "リアルタイム",
+    "download": "ダウンロード",
+    "search": "ログを検索...",
+    "filter": {
+      "all": "すべて",
+      "info": "情報",
+      "warning": "警告",
+      "error": "エラー"
+    },
+    "table": {
+      "time": "時間",
+      "method": "メソッド",
+      "path": "パス",
+      "tool": "ツール",
+      "status": "ステータス",
+      "duration": "所要時間",
+      "host": "ホスト",
+      "request": "リクエスト",
+      "messages": "メッセージ"
+    },
+    "live": "Live",
+    "noServers": "サーバーが見つかりません。先にサーバーを作成してください。",
+    "freeplanLimit": "無料プランでは過去1時間のログのみ閲覧できます",
+    "upgradePlan": "プランをアップグレード",
+    "status": {
+      "pending": "保留中",
+      "building": "ビルド中",
+      "deploying": "デプロイ中",
+      "running": "稼働中",
+      "stopped": "停止",
+      "failed": "失敗"
+    },
+    "pdf": {
+      "title": "リクエストログ",
+      "server": "サーバー",
+      "generated": "生成日時",
+      "totalLogs": "ログ件数"
+    },
+    "tooltip": {
+      "stopAutoRefresh": "自動更新を停止",
+      "startAutoRefresh": "自動更新を開始（2秒間隔）",
+      "refresh": "ログを更新",
+      "downloadPdf": "PDFをダウンロード"
+    }
+  },
+  "team": {
+    "title": "チームメンバー",
+    "usage": "{current} / {max} メンバー",
+    "addMember": "メンバーを追加",
+    "empty": "メンバーはあなただけです",
+    "loadError": "チームメンバーの読み込みに失敗しました",
+    "roles": {
+      "owner": "オーナー",
+      "admin": "管理者",
+      "member": "メンバー",
+      "viewer": "閲覧者"
+    },
+    "roleDesc": {
+      "admin": "サーバーとメンバーの管理が可能",
+      "member": "サーバーの作成と編集が可能",
+      "viewer": "サーバーの閲覧のみ"
+    },
+    "add": {
+      "title": "チームメンバーを追加",
+      "email": "メールアドレス",
+      "role": "役割",
+      "submit": "招待を送信"
+    },
+    "remove": {
+      "confirm": "{name}をこのワークスペースから削除しますか？"
+    },
+    "errors": {
+      "userNotFound": "このメールアドレスのユーザーが見つかりません",
+      "alreadyMember": "このユーザーは既にメンバーです",
+      "limitReached": "プランのメンバー上限に達しました"
+    },
+    "upgrade": {
+      "title": "メンバーを追加するにはアップグレード",
+      "limitMessage": "メンバー上限に達しました。追加するにはプランをアップグレードしてください。",
+      "cta": "アップグレード"
+    }
+  },
+  "billing": {
+    "title": "請求と購読",
+    "subtitle": "購読と請求設定を管理",
+    "loadError": "請求情報の読み込みに失敗しました",
+    "currentPlan": "現在のプラン",
+    "currentPlanDesc": "現在の購読状況",
+    "plan": "{plan}プラン",
+    "status": "ステータス",
+    "periodEnd": "現在の期間終了日",
+    "invoiceHistory": "請求履歴",
+    "noInvoices": "請求履歴はまだありません",
+    "viewInvoice": "請求書を表示",
+    "downloadPdf": "PDFをダウンロード",
+    "manageSubscription": "購読を管理",
+    "cancelSubscription": "購読をキャンセル",
+    "cancelling": "キャンセル中...",
+    "cancelTitle": "購読のキャンセル",
+    "cancelDesc": "購読をキャンセルしてもよろしいですか？現在の請求期間が終了するまでアクセスは継続し、その後アカウントは無料プランにダウングレードされます。",
+    "keepSubscription": "購読を維持",
+    "confirmCancel": "はい、購読をキャンセル",
+    "undoCancel": "キャンセルを取り消す",
+    "undoCancelling": "取り消し中...",
+    "reactivate": "再開する",
+    "scheduledCancel": "キャンセル予定",
+    "scheduledCancelDesc": "この購読は {date} にキャンセルされます。キャンセルを取り消すと購読を継続できます。",
+    "upgrade": "アップグレード",
+    "downgrade": "ダウングレード",
+    "contactSales": "お問い合わせ",
+    "enterpriseCustomPricing": "ご利用規模に応じた最適なプランをご提案",
+    "perMonth": "/月",
+    "billedYearly": "年額 ¥{price}",
+    "planLimits": "プラン上限",
+    "planLimitsDesc": "現在のプランに基づく使用上限",
+    "limit": "上限",
+    "summary": {
+      "title": "今月の請求サマリー",
+      "nextBillingDate": "次回請求日",
+      "estimatedAmount": "次回請求予定額",
+      "currentCycle": "現在の請求期間",
+      "to": "〜"
+    },
+    "breakdown": {
+      "title": "請求内訳",
+      "item": "項目",
+      "quantity": "数量",
+      "unitPrice": "単価",
+      "subtotal": "小計",
+      "planBase": "基本プラン",
+      "total": "合計",
+      "taxNote": "※表示価格は税込みです"
+    },
+    "usage": {
+      "title": "今月の使用状況",
+      "servers": "サーバー",
+      "deployments": "デプロイ",
+      "requests": "リクエスト",
+      "of": "/ {max}",
+      "unlimited": "無制限"
+    },
+    "paymentMethod": {
+      "title": "支払い方法",
+      "card": "カード",
+      "endingIn": "**** {last4}",
+      "expires": "有効期限",
+      "change": "支払い方法を変更",
+      "noMethod": "支払い方法が設定されていません"
+    },
+    "interval": {
+      "monthly": "月額",
+      "yearly": "年額",
+      "save": "20%お得"
+    },
+    "limits": {
+      "mcpServers": "MCPサーバー",
+      "deploymentsMonth": "デプロイメント/月",
+      "requestsMonth": "APIリクエスト/月",
+      "teamMembers": "チームメンバー",
+      "logRetention": "ログ保持",
+      "customDomains": "カスタムドメイン",
+      "prioritySupport": "優先サポート",
+      "sso": "SSO/SAML",
+      "unlimited": "無制限",
+      "days": "{days}日"
+    },
+    "faq": {
+      "title": "請求FAQ",
+      "cancelQuestion": "購読をキャンセルするには？",
+      "cancelAnswer": "「購読を管理」をクリックして請求ポータルにアクセスし、購読をキャンセルできます。請求期間終了まではアクセスが継続します。",
+      "changeQuestion": "プランを変更できますか？",
+      "changeAnswer": "はい！いつでもプランのアップグレードまたはダウングレードが可能です。アップグレード時は日割り料金が請求されます。ダウングレードは現在の請求期間終了時に適用されます。",
+      "paymentQuestion": "どの支払い方法に対応していますか？",
+      "paymentAnswer": "安全な決済プロセッサであるStripeを通じて、主要なクレジットカード（Visa、Mastercard、American Express）に対応しています。"
+    },
+    "success": {
+      "title": "支払い処理中...",
+      "description": "お支払いを処理しています。しばらくお待ちください。",
+      "checkBilling": "確認を待っています...",
+      "goToDashboard": "ダッシュボード",
+      "goToBilling": "請求ページへ",
+      "completeTitle": "支払い完了！",
+      "completeDescription": "サブスクリプションが正常に有効化されました。",
+      "redirecting": "請求ページにリダイレクト中...",
+      "timeoutTitle": "処理に時間がかかっています",
+      "timeoutDescription": "請求ページでサブスクリプションの状態を確認してください。"
+    },
+    "cancel": {
+      "title": "支払いがキャンセルされました",
+      "description": "支払いはキャンセルされました。料金は発生していません。",
+      "help": "ご質問やサポートが必要な場合は、サポートチームまでお問い合わせください。",
+      "backToBilling": "請求に戻る",
+      "viewPlans": "プランを見る"
+    },
+    "plans": {
+      "free": {
+        "name": "Free",
+        "description": "個人プロジェクト向け",
+        "features": ["サーバー3つまで", "デプロイ50回/月", "リクエスト10,000回/月", "ログ保持7日間", "コミュニティサポート"]
+      },
+      "pro": {
+        "name": "Pro",
+        "description": "プロフェッショナル開発者向け",
+        "features": ["サーバー20個まで", "デプロイ500回/月", "リクエスト500,000回/月", "ログ保持30日間", "カスタムドメイン", "メールサポート"]
+      },
+      "team": {
+        "name": "Team",
+        "description": "チーム・組織向け",
+        "features": ["サーバー100個まで", "デプロイ2,000回/月", "リクエスト5,000,000回/月", "ログ保持90日間", "カスタムドメイン", "チームメンバー10人まで", "優先サポート"]
+      },
+      "enterprise": {
+        "name": "Enterprise",
+        "description": "大規模組織向け",
+        "features": ["サーバー無制限", "デプロイ無制限", "リクエスト無制限", "ログ保持1年間", "カスタムドメイン", "チームメンバー無制限", "SSO/SAML", "専任サポート", "SLA保証"]
+      }
+    }
+  },
+  "blog": {
+    "title": "Blog",
+    "subtitle": "最新の技術情報をお届けします",
+    "empty": "まだ記事がありません",
+    "backToList": "記事一覧",
+    "author": "著者",
+    "readMore": "他の記事を読む",
+    "notFound": "記事が見つかりません"
+  },
+  "faqPage": {
+    "title": "よくある質問",
+    "subtitle": "Nodeflareについてのよくある質問と回答です。",
+    "notFound": "お探しの回答が見つかりませんか？お気軽に",
+    "contactLink": "お問い合わせ",
+    "contactSuffix": "ください。",
+    "categories": {
+      "basic": "基本",
+      "pricing": "料金",
+      "technical": "技術",
+      "security": "セキュリティ"
+    },
+    "basic": {
+      "q1": "Nodeflareとは何ですか？",
+      "a1": "NodeflareはMCPサーバーをクラウド上でホスティングするサービスです。MCPサーバーとは、Claude等のAIアシスタントが外部のツールやデータにアクセスするためのサーバーです。GitHubリポジトリを接続するだけで、自動でビルド・デプロイが行われます。",
+      "q2": "MCPサーバーとは何ですか？",
+      "a2": "MCP（Model Context Protocol）サーバーは、AIアシスタントが使用できるツールを定義するサーバーです。例えば、データベースの検索、ファイルの読み書き、外部APIの呼び出しなど、任意の機能をAIに提供できます。",
+      "q3": "どのAIで使えますか？",
+      "a3": "現在、Anthropic社のClaudeに対応しています。Claude Desktop、Claude.ai、API経由など、MCPに対応した環境であればご利用いただけます。"
+    },
+    "pricing": {
+      "q1": "無料プランでどこまで使えますか？",
+      "a1": "無料プランでは、サーバー3つまで、月間10,000リクエストまでご利用いただけます。個人での利用や小規模なプロジェクトには十分な容量です。",
+      "q2": "有料プランにアップグレードするタイミングは？",
+      "a2": "サーバー数が4つ以上必要な場合、月間リクエスト数が10,000を超える場合、またはカスタムドメインや優先サポートが必要な場合は、Proプラン（月額¥2,980）へのアップグレードをご検討ください。",
+      "q3": "支払い方法は何がありますか？",
+      "a3": "クレジットカード（Visa、Mastercard、American Express、JCB）に対応しています。請求書払いをご希望の場合は、お問い合わせください。"
+    },
+    "technical": {
+      "q1": "どの言語に対応していますか？",
+      "a1": "TypeScript / JavaScript、Python、Go、Rust に対応しています。Dockerfileを使ったカスタムコンテナも利用可能です。",
+      "q2": "デプロイにかかる時間は？",
+      "a2": "通常、GitHubへのpushから1〜2分程度でデプロイが完了します。初回のビルドは依存関係のインストールがあるため、やや時間がかかる場合があります。",
+      "q3": "環境変数はどのように設定しますか？",
+      "a3": "ダッシュボードの各サーバー設定画面から、環境変数を安全に設定できます。外部サービスのAPIキーやシークレットなどの機密情報も暗号化して保存されます。",
+      "q4": "カスタムドメインは使えますか？",
+      "a4": "Proプラン以上でカスタムドメインをご利用いただけます。DNSの設定後、SSL証明書は自動で発行されます。"
+    },
+    "security": {
+      "q1": "アクセストークンはどのように管理されますか？",
+      "a1": "各サーバーに対してアクセストークンを発行できます。トークンごとにアクセス権限を設定でき、不要になったトークンはいつでも無効化できます。",
+      "q2": "アクセスログは確認できますか？",
+      "a2": "はい、すべてのツール呼び出しのログをダッシュボードから確認できます。リクエスト内容、レスポンス、実行時間などを確認できます。",
+      "q3": "データはどこに保存されますか？",
+      "a3": "サーバーは東京リージョンで稼働しており、データも国内に保存されます。"
+    }
+  },
+  "pricing": {
+    "title": "料金プラン",
+    "subtitle": "小規模なら無料。スケールに合わせてアップグレード。",
+    "monthly": "月額",
+    "yearly": "年額",
+    "yearlySave": "17%お得",
+    "recommended": "おすすめ",
+    "perMonth": "/月",
+    "yearlyPrice": "年額 {price}",
+    "comparison": "プラン比較",
+    "feature": "機能",
+    "unlimited": "無制限",
+    "days": "{days}日",
+    "startFree": "無料で始める",
+    "contactUs": "お問い合わせ",
+    "startPlan": "{plan}を始める",
+    "enterpriseCustomPricing": "ご利用規模に応じた最適なプランをご提案",
+    "features": {
+      "mcpServers": "MCPサーバー数",
+      "deploysMonth": "デプロイ/月",
+      "requestsMonth": "リクエスト/月",
+      "teamMembers": "チームメンバー",
+      "logRetention": "ログ保持期間",
+      "customDomains": "カスタムドメイン",
+      "prioritySupport": "優先サポート",
+      "ssoSaml": "SSO/SAML"
+    },
+    "faq": {
+      "title": "よくある質問",
+      "q1": "無料プランから有料プランへの移行は簡単ですか？",
+      "a1": "はい、ダッシュボードからワンクリックでアップグレードできます。データや設定はそのまま引き継がれます。",
+      "q2": "支払い方法は何に対応していますか？",
+      "a2": "クレジットカード（Visa、Mastercard、American Express、JCB）に対応しています。",
+      "q3": "解約はいつでもできますか？",
+      "a3": "はい、いつでも解約可能です。解約後も請求期間の終了まではサービスをご利用いただけます。",
+      "q4": "リクエスト数の上限を超えたらどうなりますか？",
+      "a4": "上限に近づくとメールでお知らせします。上限を超えた場合、追加料金が発生するか、一時的にリクエストが制限されます。",
+      "q5": "年額払いにするとどのくらいお得ですか？",
+      "a5": "年額払いにすると約17%お得になります。例えばProプランは月額2,980円ですが、年額払いでは月あたり約2,483円相当になります。"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "profile": {
+      "title": "プロフィール"
+    },
+    "account": {
+      "title": "アカウント",
+      "name": "名前",
+      "namePlaceholder": "名前を入力",
+      "githubConnection": "GitHub接続",
+      "connectedAs": "@{name}として接続中",
+      "connected": "接続済み",
+      "reconnect": "再接続",
+      "signOut": "サインアウト",
+      "signOutDesc": "このデバイスからサインアウトします。"
+    },
+    "notifications": {
+      "title": "メール通知",
+      "deploySuccess": "デプロイ成功",
+      "deploySuccessDesc": "デプロイが成功した時にメールで通知",
+      "deployFailure": "デプロイ失敗",
+      "deployFailureDesc": "デプロイが失敗した時にメールで通知",
+      "serverDown": "サーバーダウン",
+      "serverDownDesc": "サーバーがダウンした時にメールで通知",
+      "weeklyReport": "週間レポート",
+      "weeklyReportDesc": "週ごとの利用状況をメールで受け取る"
+    },
+    "language": {
+      "title": "言語設定",
+      "description": "アプリケーションの表示言語を選択します",
+      "japanese": "日本語",
+      "english": "English"
+    },
+    "danger": {
+      "title": "危険なアクション",
+      "deleteAccount": "アカウントを削除",
+      "deleteAccountDetail": "アカウントとすべての関連データを完全に削除します。この操作は元に戻せません。",
+      "deleteConfirm": "本当によろしいですか？この操作はアカウント、すべてのワークスペース、サーバー、デプロイメントを完全に削除します。",
+      "typeDelete": "確認するには DELETE と入力してください:",
+      "permanentlyDelete": "完全に削除",
+      "deleting": "削除中...",
+      "deleteFailed": "アカウントの削除に失敗しました。もう一度お試しください。"
+    }
+  },
+  "auth": {
+    "callback": {
+      "signingIn": "ログイン中",
+      "signingUp": "新規登録中",
+      "loading": "読み込み中",
+      "error": "認証エラー",
+      "returnHome": "ホームに戻る"
+    },
+    "settings": {
+      "title": "認証設定",
+      "description": "MCPサーバーへのアクセス認証方法を管理します",
+      "accessTokens": {
+        "title": "アクセストークン",
+        "description": "APIキーを生成してMCPサーバーに直接アクセスします。Claude Code、スクリプト、カスタムクライアントに最適です。",
+        "badge": "推奨"
+      },
+      "oauth": {
+        "title": "OAuth アプリ",
+        "description": "OAuth 2.0認証を設定してClaudeカスタムコネクタなどの外部サービスと連携します。",
+        "badge": "Claude対応"
+      },
+      "info": {
+        "title": "どちらを選ぶべき？",
+        "description": "プログラムからの直接アクセスにはアクセストークン、Claude.aiやChatGPTなどのAIクライアントとの連携にはOAuthを使用します。"
+      },
+      "manage": "管理する"
+    },
+    "login": {
+      "title": "ログイン",
+      "email": "メールアドレス",
+      "password": "パスワード",
+      "submit": "ログイン",
+      "forgotPassword": "パスワードを忘れた方",
+      "noAccount": "アカウントをお持ちでない方",
+      "signup": "新規登録",
+      "withGithub": "GitHubでログイン"
+    },
+    "signup": {
+      "title": "新規登録",
+      "name": "名前",
+      "email": "メールアドレス",
+      "password": "パスワード",
+      "confirmPassword": "パスワード（確認）",
+      "submit": "登録",
+      "hasAccount": "すでにアカウントをお持ちの方",
+      "login": "ログイン",
+      "withGithub": "GitHubで登録"
+    }
+  },
+  "errors": {
+    "required": "必須項目です",
+    "invalidEmail": "有効なメールアドレスを入力してください",
+    "passwordMin": "パスワードは8文字以上で入力してください",
+    "passwordMatch": "パスワードが一致しません",
+    "invalidSlug": "小文字の英数字とハイフンのみ使用できます",
+    "invalidGithubRepo": "owner/repo形式で入力してください",
+    "serverError": "サーバーエラーが発生しました。しばらく経ってからもう一度お試しください。",
+    "networkError": "ネットワークエラーが発生しました。接続を確認してください。",
+    "unauthorized": "認証が必要です。ログインしてください。",
+    "forbidden": "このアクションを実行する権限がありません。",
+    "notFound": "リソースが見つかりませんでした。",
+    "invalidMcpRepository": "有効なMCPサーバーリポジトリではありません。package.json（Node.js）またはrequirements.txt/pyproject.toml（Python）にMCP SDKの依存関係が必要です。",
+    "serverNotFound": "サーバーが見つかりませんでした"
+  },
+  "footer": {
+    "tagline": "MCP専用ホスティング",
+    "product": "プロダクト",
+    "docs": "ドキュメント",
+    "pricing": "料金",
+    "blog": "ブログ",
+    "support": "サポート",
+    "faq": "よくある質問",
+    "contact": "お問い合わせ",
+    "legal": "法務",
+    "terms": "利用規約",
+    "privacy": "プライバシーポリシー",
+    "commerce": "特定商取引法に基づく表記",
+    "copyright": "© {year} Nodeflare. All rights reserved."
+  },
+  "contact": {
+    "title": "お問い合わせ",
+    "subtitle": "またはフォームからどうぞ",
+    "name": "お名前",
+    "email": "メールアドレス",
+    "message": "内容",
+    "submit": "送信",
+    "submitting": "送信中...",
+    "successTitle": "送信完了",
+    "successMessage": "1〜2営業日以内にご返信します。",
+    "errors": {
+      "rateLimited": "送信回数が上限に達しました。しばらくしてからお試しください。",
+      "invalidEmail": "有効なメールアドレスを入力してください。",
+      "messageTooShort": "メッセージは10文字以上で入力してください。",
+      "default": "送信に失敗しました。もう一度お試しください。"
+    }
+  },
+  "docs": {
+    "title": "NodeFlare ユーザーガイド",
+    "subtitle": "各画面の使い方を説明します",
+    "sidebar": "画面ガイド",
+    "common": {
+      "features": "画面の構成",
+      "actions": "操作方法"
+    },
+    "contact": {
+      "prompt": "ご不明点があればお気軽にお問い合わせください。",
+      "link": "お問い合わせ →"
+    },
+    "sections": {
+      "dashboard": {
+        "title": "ダッシュボード",
+        "description": "ログイン後最初に表示される画面です。サーバーの状態やお知らせを一覧で確認できます。",
+        "features": [
+          "サーバーカード：各サーバーの状態（稼働中/停止中/エラー）を一目で確認",
+          "クイックアクション：サーバーの再起動やデプロイをワンクリックで実行",
+          "使用状況：今月のリクエスト数・サーバー数などの利用状況",
+          "お知らせ：NodeFlareからの重要なお知らせ"
+        ],
+        "actions": [
+          "サーバーカードをクリック → サーバー詳細画面へ移動",
+          "「新規サーバー」ボタン → サーバー作成画面へ移動",
+          "再起動アイコン → サーバーを再起動"
+        ]
+      },
+      "servers": {
+        "title": "サーバー一覧",
+        "description": "作成したすべてのMCPサーバーを一覧表示します。ワークスペースを切り替えて管理できます。",
+        "features": [
+          "サーバー名：クリックで詳細画面へ移動",
+          "ステータスバッジ：稼働中（緑）/ 停止中（グレー）/ エラー（赤）/ ビルド中（黄）",
+          "最終デプロイ：直近のデプロイ日時",
+          "アクションボタン：再起動・停止・デプロイなどのクイック操作"
+        ],
+        "actions": [
+          "「新規サーバー」ボタン → サーバー作成画面へ",
+          "サーバー行をクリック → サーバー詳細画面へ",
+          "ワークスペース切り替え → 上部のセレクタで切り替え"
+        ]
+      },
+      "serverNew": {
+        "title": "サーバー作成",
+        "description": "新しいMCPサーバーを作成する画面です。GitHubリポジトリを選択してデプロイします。",
+        "features": [
+          "サーバー名：管理用の表示名（日本語可）",
+          "スラッグ：URLの一部になる識別子（例: my-server → my-server.nodeflare.tech）",
+          "GitHubリポジトリ：デプロイ元のリポジトリを選択",
+          "ブランチ：デプロイするブランチ（デフォルト: main）",
+          "対応言語：TypeScript / Python / Go / Rust / Docker"
+        ],
+        "actions": [
+          "サーバー名とスラッグを入力",
+          "「リポジトリを選択」でGitHubリポジトリを選ぶ",
+          "「サーバーを作成」をクリック → 自動でビルド・デプロイ開始"
+        ]
+      },
+      "serverDetail": {
+        "title": "サーバー詳細",
+        "description": "サーバーの基本情報と現在の状態を表示します。複数のタブで機能が分かれています。",
+        "features": [
+          "概要タブ：ステータス、エンドポイントURL、利用可能なツール一覧",
+          "デプロイメントタブ：デプロイ履歴とビルドログ",
+          "テストタブ：ブラウザ上でツールをテスト実行",
+          "シークレットタブ：APIキーや接続情報を暗号化保存",
+          "メトリクスタブ：リクエスト数やレスポンス時間をグラフ表示",
+          "設定タブ：サーバー名やブランチの変更、削除"
+        ],
+        "actions": [
+          "「コピー」ボタン → エンドポイントURLをコピー",
+          "「デプロイ」ボタン → 手動デプロイを実行",
+          "「再起動」/「停止」ボタン → サーバーの操作"
+        ]
+      },
+      "logs": {
+        "title": "ログ",
+        "description": "MCPサーバーへのリクエストログをリアルタイムで確認できます。",
+        "features": [
+          "サーバー選択：表示するサーバーを切り替え",
+          "検索：ツール名やレスポンスで絞り込み",
+          "ライブモード：自動更新ON/OFF（2秒間隔）",
+          "ログ項目：日時、ステータス、所要時間、ツール名"
+        ],
+        "actions": [
+          "ライブボタン → 自動更新のON/OFF切り替え",
+          "更新ボタン → 手動でログを更新",
+          "ダウンロードボタン → ログをPDFでエクスポート"
+        ]
+      },
+      "accessTokens": {
+        "title": "アクセストークン",
+        "description": "MCPサーバーへのアクセスに使用するトークンを管理します。",
+        "features": [
+          "トークン名：識別用の名前",
+          "対象サーバー：全サーバーまたは特定サーバー",
+          "スコープ：Full Access / Tools / Resources / Prompts",
+          "作成日・最終使用日"
+        ],
+        "actions": [
+          "「新規トークン」ボタン → トークン作成フォームを表示",
+          "トークン作成 → 表示されたトークンをコピーして保存（一度だけ表示）",
+          "削除 → 不要になったトークンを取り消し"
+        ]
+      },
+      "oauth": {
+        "title": "OAuthアプリ",
+        "description": "外部アプリケーションからMCPサーバーにアクセスするためのOAuthクライアントを管理します。",
+        "features": [
+          "アプリ名：識別用の名前",
+          "リダイレクトURI：認証後のコールバックURL",
+          "Client ID / Client Secret：認証に使用するクレデンシャル",
+          "対応フロー：Authorization Code + PKCE、Client Credentials"
+        ],
+        "actions": [
+          "「新規クライアント」ボタン → OAuthアプリ作成フォームを表示",
+          "Client IDとSecretをコピー → 外部アプリに設定",
+          "削除 → 不要になったアプリを削除"
+        ]
+      },
+      "team": {
+        "title": "チーム",
+        "description": "ワークスペースにメンバーを招待して、サーバーを共同で管理できます。",
+        "features": [
+          "メンバー数：現在のメンバー数と上限を表示",
+          "メンバーリスト：各メンバーの名前・メールアドレス・ロール",
+          "ロール：オーナー / 管理者 / メンバー / 閲覧者"
+        ],
+        "actions": [
+          "「メンバーを追加」ボタン → 招待フォームを表示",
+          "メールアドレスとロールを入力 → 「招待」をクリック",
+          "ロール変更 → ドロップダウンで変更",
+          "メンバー削除 → 「削除」ボタンをクリック"
+        ]
+      },
+      "billing": {
+        "title": "課金",
+        "description": "サブスクリプションの管理と請求情報の確認ができます。",
+        "features": [
+          "現在のプラン：プラン名、料金、次回請求日",
+          "利用状況：サーバー数、リクエスト数など",
+          "支払い方法：クレジットカードの登録・変更",
+          "請求履歴：過去の請求一覧とPDF領収書"
+        ],
+        "actions": [
+          "「プランを変更」ボタン → アップグレード/ダウングレード",
+          "「支払い方法を変更」 → カード情報の更新",
+          "請求履歴の「PDF」 → 領収書をダウンロード"
+        ]
+      },
+      "settings": {
+        "title": "ユーザー設定",
+        "description": "アカウント設定と通知設定を管理します。",
+        "features": [
+          "プロフィール：表示名、メールアドレス",
+          "言語設定：日本語 / English",
+          "通知設定：デプロイ成功/失敗、サーバーダウン、週次レポート"
+        ],
+        "actions": [
+          "表示名を変更 → 入力して保存",
+          "言語を切り替え → ラジオボタンで選択",
+          "通知設定 → トグルでON/OFF"
+        ]
+      }
+    }
+  },
+  "commercePage": {
+    "title": "特定商取引法に基づく表記",
+    "seller": "販売事業者",
+    "sellerValue": "Nodeflare",
+    "operator": "運営責任者",
+    "operatorValue": "関口峻矢",
+    "address": "所在地",
+    "addressValue": "群馬県高崎市上豊岡町180-7",
+    "phone": "電話番号",
+    "phoneValue": "070-1390-0619",
+    "contact": "お問い合わせ",
+    "contactValue": "よりご連絡ください",
+    "contactLink": "お問い合わせフォーム",
+    "price": "販売価格",
+    "priceValue": "に表示された価格（税込）",
+    "priceLink": "料金ページ",
+    "payment": "支払方法",
+    "paymentValue": "クレジットカード（VISA、Mastercard、American Express、JCB）",
+    "paymentTiming": "支払時期",
+    "paymentTimingValue": "サービス利用開始時および契約更新時",
+    "serviceDelivery": "サービス提供時期",
+    "serviceDeliveryValue": "お支払い完了後、即時ご利用いただけます",
+    "cancellation": "返品・キャンセル",
+    "cancellationValue1": "デジタルサービスの性質上、サービス提供開始後の返金には応じかねます。",
+    "cancellationValue2": "サブスクリプションはいつでもキャンセル可能です。キャンセル後も現在の請求期間の終了までサービスをご利用いただけます。",
+    "cancellationValue3": "初回契約から7日以内にキャンセルされた場合は、全額返金いたします。",
+    "environment": "動作環境",
+    "environmentInternet": "インターネット接続環境",
+    "environmentBrowser": "モダンブラウザ（Chrome、Firefox、Safari、Edge の最新版）",
+    "other": "その他",
+    "otherValue1": "上記以外の事項については、",
+    "otherTermsLink": "利用規約",
+    "otherValue1End": "をご確認ください。",
+    "otherValue2": "料金は予告なく変更される場合があります。変更前に契約されたお客様は、現在の契約期間中は変更前の料金が適用されます。"
+  },
+  "apiErrors": {
+    "SLUG_ALREADY_EXISTS": "このスラッグは既に使用されています。別のスラッグを入力してください。",
+    "DUPLICATE_ENTRY": "同じ内容のサーバーが既に存在します。",
+    "INVALID_SLUG": "スラッグには小文字の英数字とハイフンのみ使用できます。ハイフンで始まったり終わったりすることはできません。",
+    "INVALID_REPOSITORY": "リポジトリの形式が正しくありません。「ユーザー名/リポジトリ名」の形式で入力してください（例: username/my-repo）。",
+    "INVALID_GITHUB_REPO": "GitHubリポジトリの形式が正しくありません。「owner/repo」の形式で入力してください。",
+    "INVALID_RUNTIME": "選択されたランタイムは無効です。Node.js、Python、Go、Rustから選択してください。",
+    "INVALID_TRANSPORT": "トランスポートタイプが無効です。SSEまたはSTDIOを選択してください。",
+    "INVALID_WORKSPACE": "指定されたワークスペースが存在しないか、アクセス権限がありません。",
+    "INVALID_MCP_REPOSITORY": "このリポジトリはMCPサーバーとして認識できませんでした。MCP SDKの依存関係が正しく設定されているか確認してください。",
+    "SERVER_LIMIT_REACHED": "サーバー数の上限に達しました。プランをアップグレードしてください。",
+    "DEPLOYMENT_LIMIT_REACHED": "今月のデプロイ回数の上限に達しました。プランをアップグレードしてください。",
+    "SERVER_NOT_RUNNING": "サーバーが起動していません。先にデプロイしてください。",
+    "NO_ENDPOINT": "サーバーのエンドポイントがまだ設定されていません。デプロイが完了するまでお待ちください。",
+    "VALIDATION_ERROR": "入力内容に誤りがあります。確認してもう一度お試しください。",
+    "INTERNAL_ERROR": "処理中に問題が発生しました。入力内容を確認してもう一度お試しください。",
+    "NOT_FOUND": "お探しのリソースが見つかりませんでした。",
+    "FORBIDDEN": "この操作を行う権限がありません。",
+    "UNAUTHORIZED": "ログインが必要です。再度ログインしてください。",
+    "USER_NOT_REGISTERED": "このメールアドレスは登録されていません。招待するにはユーザーがGitHubで先にサインアップする必要があります。",
+    "default": "エラーが発生しました。もう一度お試しください。"
+  }
+}

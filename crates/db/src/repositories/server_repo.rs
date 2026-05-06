@@ -1,0 +1,372 @@
+use crate::models::{CreateServer, McpServer, UpdateServer};
+use mcp_common::types::{AccessMode, ServerStatus, Transport, Visibility};
+use mcp_common::Result;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+pub struct ServerRepository;
+
+impl ServerRepository {
+    /// Maximum servers to return in a single query
+    const MAX_SERVERS_PER_QUERY: i64 = 200;
+    pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<McpServer>> {
+        let server = sqlx::query_as::<_, McpServer>(
+            r#"
+            SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
+                   github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, auth_enabled, created_at, updated_at
+            FROM mcp_servers
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(server)
+    }
+
+    pub async fn find_by_slug(
+        pool: &PgPool,
+        workspace_id: Uuid,
+        slug: &str,
+    ) -> Result<Option<McpServer>> {
+        let server = sqlx::query_as::<_, McpServer>(
+            r#"
+            SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
+                   github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, auth_enabled, created_at, updated_at
+            FROM mcp_servers
+            WHERE workspace_id = $1 AND slug = $2
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(slug)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(server)
+    }
+
+    pub async fn find_by_endpoint_slug(pool: &PgPool, slug: &str) -> Result<Option<McpServer>> {
+        // Find server by slug - access control is handled by API key validation
+        let server = sqlx::query_as::<_, McpServer>(
+            r#"
+            SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
+                   github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, auth_enabled, created_at, updated_at
+            FROM mcp_servers
+            WHERE slug = $1 AND status = 'running'
+            "#,
+        )
+        .bind(slug)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(server)
+    }
+
+    pub async fn list_by_workspace(
+        pool: &PgPool,
+        workspace_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<McpServer>> {
+        let servers = sqlx::query_as::<_, McpServer>(
+            r#"
+            SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
+                   github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, auth_enabled, created_at, updated_at
+            FROM mcp_servers
+            WHERE workspace_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(servers)
+    }
+
+    pub async fn count_by_workspace(pool: &PgPool, workspace_id: Uuid) -> Result<i64> {
+        let count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*) FROM mcp_servers WHERE workspace_id = $1
+            "#,
+        )
+        .bind(workspace_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(count.0)
+    }
+
+    pub async fn create(pool: &PgPool, data: CreateServer) -> Result<McpServer> {
+        let runtime_str = data.runtime.to_string();
+        let visibility_str = match data.visibility {
+            Visibility::Private => "private",
+            Visibility::Team => "team",
+            Visibility::Public => "public",
+        };
+        let access_mode_str = match data.access_mode {
+            AccessMode::Public => "public",
+            AccessMode::VpnOnly => "vpn_only",
+        };
+        let transport_str = match data.transport {
+            Transport::Sse => "sse",
+            Transport::Stdio => "stdio",
+        };
+
+        let server = sqlx::query_as::<_, McpServer>(
+            r#"
+            INSERT INTO mcp_servers (
+                workspace_id, name, slug, description, github_repo, github_branch,
+                github_installation_id, runtime, visibility, access_mode, transport, region, root_directory, mcp_path, entry_command, auth_enabled
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            RETURNING id, workspace_id, name, slug, description, github_repo, github_branch,
+                      github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
+                      rate_limit_per_minute, region, root_directory, mcp_path, entry_command, auth_enabled, created_at, updated_at
+            "#,
+        )
+        .bind(data.workspace_id)
+        .bind(&data.name)
+        .bind(&data.slug)
+        .bind(&data.description)
+        .bind(&data.github_repo)
+        .bind(&data.github_branch)
+        .bind(data.github_installation_id)
+        .bind(runtime_str)
+        .bind(visibility_str)
+        .bind(access_mode_str)
+        .bind(transport_str)
+        .bind(&data.region)
+        .bind(&data.root_directory)
+        .bind(&data.mcp_path)
+        .bind(&data.entry_command)
+        .bind(data.auth_enabled)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(server)
+    }
+
+    pub async fn update(pool: &PgPool, id: Uuid, data: UpdateServer) -> Result<McpServer> {
+        let visibility_str = data.visibility.map(|v| match v {
+            Visibility::Private => "private",
+            Visibility::Team => "team",
+            Visibility::Public => "public",
+        });
+
+        let access_mode_str = data.access_mode.map(|a| match a {
+            AccessMode::Public => "public",
+            AccessMode::VpnOnly => "vpn_only",
+        });
+
+        let status_str = data.status.map(|s| match s {
+            ServerStatus::Inactive => "inactive",
+            ServerStatus::Building => "building",
+            ServerStatus::Deploying => "deploying",
+            ServerStatus::Running => "running",
+            ServerStatus::Failed => "failed",
+            ServerStatus::Stopped => "stopped",
+        });
+
+        let server = sqlx::query_as::<_, McpServer>(
+            r#"
+            UPDATE mcp_servers
+            SET
+                name = COALESCE($2, name),
+                description = COALESCE($3, description),
+                github_branch = COALESCE($4, github_branch),
+                visibility = COALESCE($5, visibility),
+                access_mode = COALESCE($6, access_mode),
+                status = COALESCE($7, status),
+                endpoint_url = COALESCE($8, endpoint_url),
+                region = COALESCE($9, region),
+                root_directory = COALESCE($10, root_directory),
+                mcp_path = COALESCE($11, mcp_path),
+                entry_command = COALESCE($12, entry_command),
+                auth_enabled = COALESCE($13, auth_enabled),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, workspace_id, name, slug, description, github_repo, github_branch,
+                      github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
+                      rate_limit_per_minute, region, root_directory, mcp_path, entry_command, auth_enabled, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(&data.name)
+        .bind(&data.description)
+        .bind(&data.github_branch)
+        .bind(visibility_str)
+        .bind(access_mode_str)
+        .bind(status_str)
+        .bind(&data.endpoint_url)
+        .bind(&data.region)
+        .bind(&data.root_directory)
+        .bind(&data.mcp_path)
+        .bind(&data.entry_command)
+        .bind(data.auth_enabled)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(server)
+    }
+
+    pub async fn delete(pool: &PgPool, id: Uuid) -> Result<()> {
+        sqlx::query("DELETE FROM mcp_servers WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn update_status(
+        pool: &PgPool,
+        id: Uuid,
+        status: ServerStatus,
+        endpoint_url: Option<&str>,
+    ) -> Result<()> {
+        let status_str = match status {
+            ServerStatus::Inactive => "inactive",
+            ServerStatus::Building => "building",
+            ServerStatus::Deploying => "deploying",
+            ServerStatus::Running => "running",
+            ServerStatus::Failed => "failed",
+            ServerStatus::Stopped => "stopped",
+        };
+
+        sqlx::query(
+            r#"
+            UPDATE mcp_servers
+            SET status = $2, endpoint_url = COALESCE($3, endpoint_url), updated_at = NOW()
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(status_str)
+        .bind(endpoint_url)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// List all servers for a user across all workspaces (prevents N+1)
+    /// Note: For users with many servers, use list_all_by_user_paginated instead
+    pub async fn list_all_by_user(pool: &PgPool, user_id: Uuid) -> Result<Vec<McpServer>> {
+        Self::list_all_by_user_paginated(pool, user_id, Self::MAX_SERVERS_PER_QUERY, 0).await
+    }
+
+    /// List servers for a user with pagination support
+    /// Returns (servers, has_more) where has_more indicates if there are more pages
+    pub async fn list_all_by_user_paginated(
+        pool: &PgPool,
+        user_id: Uuid,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<McpServer>> {
+        // Cap limit to prevent abuse
+        let effective_limit = limit.min(Self::MAX_SERVERS_PER_QUERY);
+
+        let servers = sqlx::query_as::<_, McpServer>(
+            r#"
+            SELECT DISTINCT
+                s.id, s.workspace_id, s.name, s.slug, s.description,
+                s.github_repo, s.github_branch, s.github_installation_id,
+                s.runtime, s.visibility, s.access_mode, s.transport, s.status, s.endpoint_url,
+                s.rate_limit_per_minute, s.region, s.root_directory, s.mcp_path, s.entry_command, s.auth_enabled, s.created_at, s.updated_at
+            FROM mcp_servers s
+            INNER JOIN workspace_members wm ON s.workspace_id = wm.workspace_id
+            WHERE wm.user_id = $1
+            ORDER BY s.created_at DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(user_id)
+        .bind(effective_limit)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(servers)
+    }
+
+    /// Count total servers for a user across all workspaces
+    pub async fn count_all_by_user(pool: &PgPool, user_id: Uuid) -> Result<i64> {
+        let count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(DISTINCT s.id)
+            FROM mcp_servers s
+            INNER JOIN workspace_members wm ON s.workspace_id = wm.workspace_id
+            WHERE wm.user_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+
+        Ok(count.0)
+    }
+
+    /// Check if a user has access to a server (optimized single query with JOIN)
+    /// Returns true if the server exists, belongs to the workspace, and the user is a member
+    pub async fn check_user_access(
+        pool: &PgPool,
+        server_id: Uuid,
+        workspace_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<bool> {
+        let result: Option<(i32,)> = sqlx::query_as(
+            r#"
+            SELECT 1
+            FROM mcp_servers s
+            INNER JOIN workspace_members wm ON s.workspace_id = wm.workspace_id
+            WHERE s.id = $1 AND s.workspace_id = $2 AND wm.user_id = $3
+            LIMIT 1
+            "#,
+        )
+        .bind(server_id)
+        .bind(workspace_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(result.is_some())
+    }
+
+    /// Get platform-wide statistics for public display
+    pub async fn get_platform_stats(pool: &PgPool) -> Result<PlatformStats> {
+        let row: (i64, i64, i64) = sqlx::query_as(
+            r#"
+            SELECT
+                COUNT(*) as total_servers,
+                COUNT(*) FILTER (WHERE status = 'running') as running_servers,
+                COUNT(DISTINCT workspace_id) as total_workspaces
+            FROM mcp_servers
+            "#,
+        )
+        .fetch_one(pool)
+        .await?;
+
+        Ok(PlatformStats {
+            total_servers: row.0,
+            running_servers: row.1,
+            total_workspaces: row.2,
+        })
+    }
+}
+
+/// Platform-wide statistics
+#[derive(Debug, Clone)]
+pub struct PlatformStats {
+    pub total_servers: i64,
+    pub running_servers: i64,
+    pub total_workspaces: i64,
+}

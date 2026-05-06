@@ -1,0 +1,17 @@
+[package]
+name = "mcp-db"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mcp-common = { path = "../common" }
+
+tokio.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true

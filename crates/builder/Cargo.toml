@@ -1,0 +1,53 @@
+[package]
+name = "mcp-builder"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mcp-builder"
+path = "src/main.rs"
+
+[dependencies]
+mcp-common = { path = "../common" }
+mcp-db = { path = "../db" }
+mcp-queue = { path = "../queue" }
+mcp-auth = { path = "../auth" }
+mcp-github = { path = "../github" }
+mcp-email = { path = "../email" }
+
+# Async
+tokio.workspace = true
+futures.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Docker
+bollard.workspace = true
+
+# HTTP client/server
+reqwest.workspace = true
+axum.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Job queue
+apalis.workspace = true
+apalis-redis.workspace = true
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
+
+# Utils
+uuid.workspace = true
+chrono.workspace = true
+dotenvy.workspace = true
+tar = "0.4"
+flate2 = "1.0"
+tempfile = "3.10"
+regex = "1"

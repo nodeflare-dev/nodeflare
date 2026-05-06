@@ -1,0 +1,21 @@
+[package]
+name = "mcp-queue"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mcp-common = { path = "../common" }
+mcp-db = { path = "../db" }
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+
+apalis.workspace = true
+apalis-redis.workspace = true
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }

@@ -1,0 +1,58 @@
+[package]
+name = "mcp-proxy"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mcp-proxy"
+path = "src/main.rs"
+
+[dependencies]
+mcp-common = { path = "../common" }
+mcp-db = { path = "../db" }
+mcp-auth = { path = "../auth" }
+mcp-billing = { path = "../billing" }
+
+# Async
+tokio.workspace = true
+futures.workspace = true
+
+# Web
+axum.workspace = true
+axum-extra.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+
+# HTTP client
+reqwest.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Database
+sqlx.workspace = true
+fred.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Metrics
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+
+# Utils
+uuid.workspace = true
+chrono.workspace = true
+dotenvy.workspace = true
+bytes.workspace = true
+
+# LRU cache
+lru = "0.16"
