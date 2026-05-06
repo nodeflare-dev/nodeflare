@@ -48,7 +48,9 @@ export function Header() {
             </Link>
           ) : (
             <>
-              <a href="/api/v1/auth/github" className="text-sm font-medium text-gray-600 hover:text-gray-900 hidden sm:block">{t('login')}</a>
+              <a href="/api/v1/auth/github" className="hidden sm:block">
+                <Button className="h-9 px-3 sm:px-4 text-sm rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700">{t('login')}</Button>
+              </a>
               <a href="/api/v1/auth/github">
                 <Button className="h-9 px-3 sm:px-4 text-sm rounded-lg bg-violet-600 hover:bg-violet-700 text-white hidden sm:block">{t('signup')}</Button>
               </a>
