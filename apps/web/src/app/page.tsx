@@ -68,11 +68,9 @@ export default async function HomePage() {
               </h1>
 
               <div className="text-center">
-                <p className="mt-6 text-lg text-gray-800 leading-relaxed max-w-2xl text-left">
+                <p className="mt-6 text-2xl text-gray-400 leading-relaxed max-w-2xl text-left font-bold">
                   {t('heroDescription1')}<br />
-                  {t('heroDescription2')}<br />
-                  {t('heroDescription3')}<br />
-                  {t('heroDescription4')}
+                  {t('heroDescription2')}
                 </p>
 
                 <Suspense fallback={

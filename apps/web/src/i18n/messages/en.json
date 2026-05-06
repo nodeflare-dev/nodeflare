@@ -54,10 +54,8 @@
     "title": "MCP Hosting - Nodeflare",
     "heroTitle1": "MCP",
     "heroTitle2": "Hosting",
-    "heroDescription1": "Auto-convert GitHub stdio MCPs to SSE format",
-    "heroDescription2": "Deploy instantly with just a URL",
-    "heroDescription3": "Manage permissions and access logs from one dashboard",
-    "heroDescription4": "Most features are free",
+    "heroDescription1": "Auto-convert GitHub stdio MCPs to SSE format.",
+    "heroDescription2": "Delegate all authentication implementation.",
     "startWithGithub": "Start with GitHub",
     "dashboard": {
       "screenTitle": "Dashboard Screen",
