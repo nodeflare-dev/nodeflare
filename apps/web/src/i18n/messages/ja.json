@@ -55,9 +55,7 @@
     "heroTitle1": "MCP専用",
     "heroTitle2": "ホスティング",
     "heroDescription1": "GitHubのstdio形式MCPをSSE形式に自動変換。",
-    "heroDescription2": "URLを指定するだけで即デプロイ。",
-    "heroDescription3": "権限制御やアクセスログをダッシュボードで一元管理。",
-    "heroDescription4": "ほとんどの機能が無料。",
+    "heroDescription2": "認証周りの実装を全て丸投げ。",
     "startWithGithub": "GitHubで始める",
     "dashboard": {
       "screenTitle": "ダッシュボード画面",
