@@ -86,23 +86,23 @@
       "title": "What Nodeflare Can Do",
       "zeroConfig": {
         "title": "stdio→SSE Auto-Convert",
-        "desc": "Auto-convert any stdio MCP from GitHub to SSE by just specifying the URL. No fork needed, deploy instantly"
+        "desc": "Auto-convert any stdio MCP from GitHub to SSE by just specifying the URL. No fork needed, deploy instantly."
       },
       "acl": {
         "title": "Fine-Grained Permissions",
-        "desc": "Control which tools each access token can call at the method level. OAuth supported"
+        "desc": "Control which tools each access token can call at the method level. OAuth supported."
       },
       "secrets": {
         "title": "Secret Management",
-        "desc": "Store environment variables encrypted. Share safely with your team"
+        "desc": "Store environment variables encrypted. Share safely with your team."
       },
       "protocol": {
         "title": "Audit with Access Logs",
-        "desc": "Record who called what and when. Complete access logs only possible with SSE format"
+        "desc": "Record who called what and when. Complete access logs only possible with SSE format."
       },
       "alwaysOn": {
         "title": "Prevent Internal MCP Leakage",
-        "desc": "With stdio, you can't track who called what. SSE format logs every token, enabling instant detection of external leaks"
+        "desc": "With stdio, you can't track who called what. SSE format logs every token, enabling instant detection of external leaks."
       }
     },
     "devExperience": {
@@ -181,8 +181,8 @@
       "cancel": "Cancel",
       "submit": "Send",
       "sending": "Sending...",
-      "successTitle": "Message Sent",
-      "successMessage": "Thank you for your message. We will get back to you soon.",
+      "successTitle": "Thank you for reaching out",
+      "successMessage": "We have received your inquiry. Our team will get back to you shortly. We appreciate your patience.",
       "errors": {
         "invalidEmail": "Please enter a valid email address",
         "messageTooShort": "Message must be at least 10 characters",

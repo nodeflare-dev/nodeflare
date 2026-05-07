@@ -81,14 +81,15 @@ export function ContactForm() {
         </div>
 
         {contactSuccess ? (
-          <div className="text-center py-8">
-            <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+          <div className="flex items-start gap-4 p-6 bg-gray-50 rounded-lg">
+            <svg className="w-6 h-6 text-violet-600 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 2L11 13" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M22 2L15 22L11 13L2 9L22 2Z" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <div>
+              <h3 className="text-base font-bold mb-1" style={{ color: '#323232' }}>{t('contact.successTitle')}</h3>
+              <p className="text-sm text-gray-500 leading-relaxed">{t('contact.successMessage')}</p>
             </div>
-            <h3 className="text-xl font-bold text-gray-900 mb-2">{t('contact.successTitle')}</h3>
-            <p className="text-gray-600">{t('contact.successMessage')}</p>
           </div>
         ) : (
           <form onSubmit={handleContactSubmit} className="space-y-6">
