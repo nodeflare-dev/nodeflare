@@ -100,36 +100,33 @@ export default async function HomePage() {
             </div>
 
             {/* 吹き出しブロック */}
-            <div className="space-y-5">
+            <div className="space-y-4">
               {features.map((item, idx) => (
-                <div key={idx} className={`flex ${item.align === 'right' ? 'justify-end' : 'justify-start'}`}>
-                  <div className="relative inline-block max-w-md">
+                <div key={idx} className={`flex flex-col ${item.align === 'right' ? 'items-end' : 'items-start'}`}>
+                  {/* タイトル行（アイコン＋タイトル）- カード外 */}
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <svg className="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      {item.icon}
+                    </svg>
+                    <p className="text-sm font-bold text-gray-400">{t(item.titleKey)}</p>
+                  </div>
+                  {/* カード */}
+                  <div className="relative inline-block max-w-sm">
                     {/* 紫の影（ずらした吹き出し） */}
-                    <div className="absolute top-1 left-1 w-full">
-                      <div className="px-6 py-5 rounded-lg bg-violet-500" style={{ visibility: 'hidden' }}>
-                        <div className="flex items-center gap-3">
-                          <span className="w-7 h-7" />
-                          <p className="text-2xl font-bold">{t(item.titleKey)}</p>
-                        </div>
-                        <p className="mt-3 text-lg">{t(item.descKey)}</p>
+                    <div className="absolute top-1 left-1 w-full h-full">
+                      <div className="px-4 py-3 bg-violet-500" style={{ visibility: 'hidden' }}>
+                        <p className="text-base">{t(item.descKey)}</p>
                       </div>
-                      <div className="absolute inset-0 rounded-lg bg-violet-500" />
-                      <div className="absolute -bottom-[8px] left-8 w-4 h-4 rotate-45 bg-violet-500" />
+                      <div className="absolute inset-0 bg-violet-500" />
+                      {/* 矢印（横向き） */}
+                      <div className={`absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rotate-45 bg-violet-500 ${item.align === 'right' ? '-right-[5px]' : '-left-[5px]'}`} />
                     </div>
                     {/* 吹き出し本体 */}
-                    <div className="relative px-6 py-5 rounded-lg bg-gray-900">
-                      {/* タイトル行（アイコン＋タイトル） */}
-                      <div className="flex items-center gap-3">
-                        <svg className="w-7 h-7 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          {item.icon}
-                        </svg>
-                        <p className="text-2xl font-bold text-white">{t(item.titleKey)}</p>
-                      </div>
-                      {/* 説明文 */}
-                      <p className="mt-3 text-lg text-gray-300">{t(item.descKey)}</p>
+                    <div className="relative px-4 py-3" style={{ backgroundColor: '#323232' }}>
+                      <p className="text-base text-gray-100">{t(item.descKey)}</p>
                     </div>
-                    {/* 吹き出しの矢印（下向き） */}
-                    <div className="absolute -bottom-[8px] left-8 w-4 h-4 rotate-45 bg-gray-900" />
+                    {/* 吹き出しの矢印（横向き） */}
+                    <div className={`absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rotate-45 ${item.align === 'right' ? '-right-[5px]' : '-left-[5px]'}`} style={{ backgroundColor: '#323232' }} />
                   </div>
                 </div>
               ))}
