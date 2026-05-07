@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { Header, Footer } from '@/components/layout';
 import Link from 'next/link';
 import { getTranslations, getLocale } from 'next-intl/server';
@@ -30,6 +31,20 @@ function toHygraphLocales(locale: string): string[] {
 
 // Use ISR for better SEO - revalidate every 60 seconds
 export const revalidate = 60;
+
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations('blog');
+  return {
+    title: t('title'),
+    alternates: {
+      canonical: '/blog',
+      languages: {
+        'ja': '/blog',
+        'en': '/blog',
+      },
+    },
+  };
+}
 
 async function fetchBlogPosts(locales: string[]): Promise<BlogPost[]> {
   const token = process.env.HYGRAPH_TOKEN;

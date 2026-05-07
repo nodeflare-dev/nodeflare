@@ -50,6 +50,13 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
     return {
       title: `${post.title} | ${t('title')}`,
       description: post.excerpt,
+      alternates: {
+        canonical: `/blog/${slug}`,
+        languages: {
+          'ja': `/blog/${slug}`,
+          'en': `/blog/${slug}`,
+        },
+      },
     };
   } catch {
     return { title: t('title') };
