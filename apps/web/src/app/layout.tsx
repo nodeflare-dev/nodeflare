@@ -19,13 +19,6 @@ export const metadata: Metadata = {
   keywords: ['MCP', 'Model Context Protocol', 'AI', 'server deployment', 'Claude', 'TypeScript', 'Python'],
   authors: [{ name: 'Nodeflare' }],
   creator: 'Nodeflare',
-  alternates: {
-    canonical: '/',
-    languages: {
-      'ja': '/',
-      'en': '/',
-    },
-  },
   openGraph: {
     type: 'website',
     locale: 'ja_JP',
