@@ -1,9 +1,20 @@
+import type { Metadata } from 'next';
 import { getTranslations } from 'next-intl/server';
 import { Suspense } from 'react';
 import Link from 'next/link';
 
 // Use ISR for better SEO - revalidate every 60 seconds
 export const revalidate = 60;
+
+export const metadata: Metadata = {
+  alternates: {
+    canonical: '/',
+    languages: {
+      'ja': '/',
+      'en': '/',
+    },
+  },
+};
 import { Header, Footer } from '@/components/layout';
 import {
   OAuthHandler,
