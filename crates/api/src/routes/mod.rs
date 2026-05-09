@@ -22,6 +22,7 @@ pub mod webhooks;
 pub mod test;
 pub mod oauth;
 pub mod stats;
+pub mod github_accounts;
 
 use axum::{routing::{get, post, patch, delete}, Router};
 use std::sync::Arc;
@@ -29,9 +30,20 @@ use crate::state::AppState;
 
 pub fn api_router() -> Router<Arc<AppState>> {
     Router::new()
-        // Auth
+        // Auth - GitHub OAuth
         .route("/auth/github", get(auth::github_login))
         .route("/auth/github/callback", get(auth::github_callback))
+        // Auth - Google OAuth
+        .route("/auth/google", get(auth::google_login))
+        .route("/auth/google/callback", get(auth::google_callback))
+        // Auth - Email/Password
+        .route("/auth/register", post(auth::register))
+        .route("/auth/login", post(auth::login))
+        .route("/auth/verify-email", get(auth::verify_email))
+        .route("/auth/forgot-password", post(auth::forgot_password))
+        .route("/auth/reset-password", post(auth::reset_password))
+        .route("/auth/resend-verification", post(auth::resend_verification))
+        // Auth - Common
         .route("/auth/refresh", post(auth::refresh_token))
         .route("/auth/me", get(auth::get_current_user))
         .route("/auth/logout", post(auth::logout))
@@ -40,6 +52,12 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/auth/ws-token", get(auth::ws_token))
         // GitHub
         .route("/github/repos", get(github::list_repositories))
+        // GitHub Account Linking
+        .route("/github/accounts", get(github_accounts::list_accounts))
+        .route("/github/accounts/link", get(github_accounts::link_account))
+        .route("/github/accounts/callback", get(github_accounts::link_callback))
+        .route("/github/accounts/:account_id", delete(github_accounts::unlink_account))
+        .route("/github/accounts/:account_id/primary", post(github_accounts::set_primary))
         // Workspaces
         .route("/workspaces", get(workspaces::list).post(workspaces::create))
         .route(

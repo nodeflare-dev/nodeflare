@@ -48,12 +48,12 @@ export function Header() {
             </Link>
           ) : (
             <>
-              <a href="/api/v1/auth/github" className="hidden sm:block">
+              <Link href="/login" className="hidden sm:block">
                 <Button className="h-9 px-3 sm:px-4 text-sm rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-700">{t('login')}</Button>
-              </a>
-              <a href="/api/v1/auth/github">
-                <Button className="h-9 px-3 sm:px-4 text-sm rounded-lg bg-violet-600 hover:bg-violet-700 border border-violet-900 text-white hidden sm:block">{t('signup')}</Button>
-              </a>
+              </Link>
+              <Link href="/signup" className="hidden sm:block">
+                <Button className="h-9 px-3 sm:px-4 text-sm rounded-lg bg-violet-600 hover:bg-violet-700 border border-violet-900 text-white">{t('signup')}</Button>
+              </Link>
             </>
           )}
           {/* Mobile menu button */}
@@ -116,16 +116,25 @@ export function Header() {
               </a>
             </div>
             {!isLoading && !user && (
-              <div className="pt-3 border-t border-gray-100 mt-3">
-                <a
-                  href="/api/v1/auth/github"
+              <div className="pt-3 border-t border-gray-100 mt-3 space-y-2">
+                <Link
+                  href="/login"
+                  className="block w-full"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <Button variant="outline" className="w-full h-10 text-sm rounded-lg border-gray-300 text-gray-700">
+                    {t('login')}
+                  </Button>
+                </Link>
+                <Link
+                  href="/signup"
                   className="block w-full"
                   onClick={() => setMobileMenuOpen(false)}
                 >
                   <Button className="w-full h-10 text-sm rounded-lg bg-violet-600 hover:bg-violet-700 text-white">
-                    {t('login')} / {t('signup')}
+                    {t('signup')}
                   </Button>
-                </a>
+                </Link>
               </div>
             )}
           </nav>

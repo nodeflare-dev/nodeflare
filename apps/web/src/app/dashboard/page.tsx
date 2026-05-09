@@ -93,14 +93,6 @@ export default function DashboardPage() {
   const isSuccessServers = serversQuery.isSuccess;
   const isErrorServers = serversQuery.isError;
 
-  const hasNoServers = isSuccessServers && (!servers || servers.length === 0);
-
-  useEffect(() => {
-    if (hasNoServers) {
-      router.replace('/dashboard/servers/new');
-    }
-  }, [hasNoServers, router]);
-
   // 必要なデータの初期ローディング中（いずれかがロード中ならローディング表示）
   const isInitialLoading = serversQuery.isLoading || workspacesQuery.isLoading || plansQuery.isLoading;
 
@@ -132,8 +124,8 @@ export default function DashboardPage() {
     return { totalRequests, totalErrors, errorRate, uptime, isLoadingStats };
   }, [batchStats, runningServers.length, servers, isLoadingStats]);
 
-  // 初期ローディング（サーバーが成功して空の場合のみリダイレクト待ち）
-  if (isInitialLoading || hasNoServers) {
+  // 初期ローディング
+  if (isInitialLoading) {
     return (
       <div className="flex items-center justify-center min-h-[50vh]">
         <div className="w-8 h-8 border-4 rounded-full border-gray-200 border-t-violet-600 animate-spin" />

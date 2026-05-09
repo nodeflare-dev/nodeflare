@@ -220,12 +220,6 @@ export default function DashboardLayout({
     }
   }, [user, isLoading, router]);
 
-  // サーバーがない場合はnew画面にリダイレクト
-  useEffect(() => {
-    if (!serversLoading && servers && servers.length === 0 && pathname !== '/dashboard/servers/new') {
-      router.push('/dashboard/servers/new');
-    }
-  }, [servers, serversLoading, pathname, router]);
 
   if (isLoading) {
     return (

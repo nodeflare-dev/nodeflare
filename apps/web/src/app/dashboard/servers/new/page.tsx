@@ -1,15 +1,17 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import { Lock, Users, Globe, Server, Check, Link, Search, Folder, AlertCircle, Info, GitBranch, ChevronRight, Terminal, AlertTriangle, XCircle, Plus, ArrowRight, MonitorPlay } from 'lucide-react';
 import { api } from '@/lib/api';
+import { getLinkedAccounts, getRepos, LinkedGitHubAccount } from '@/lib/github-api';
 import { CreateServerRequest, McpServer, Runtime, Visibility, GitHubRepo } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { GitHubAccountSelector } from '@/components/github/GitHubAccountSelector';
 import { SiNodedotjs, SiPython, SiGo, SiRust, SiDocker, SiGithub } from 'react-icons/si';
 
 type SourceType = 'my-repos' | 'public-url';
@@ -28,9 +30,27 @@ export default function NewServerPage() {
 
   const workspaceId = workspaces?.[0]?.id;
 
+  // Linked GitHub accounts
+  const { data: linkedAccounts, isLoading: accountsLoading } = useQuery<LinkedGitHubAccount[]>({
+    queryKey: ['linked-github-accounts'],
+    queryFn: getLinkedAccounts,
+  });
+
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+
+  // Auto-select primary account when accounts load
+  useEffect(() => {
+    if (linkedAccounts && linkedAccounts.length > 0 && !selectedAccountId) {
+      const primary = linkedAccounts.find((a) => a.is_primary);
+      setSelectedAccountId(primary?.id || linkedAccounts[0].id);
+    }
+  }, [linkedAccounts, selectedAccountId]);
+
+  // Fetch repos from selected account
   const { data: repos, isLoading: reposLoading } = useQuery<GitHubRepo[]>({
-    queryKey: ['github-repos'],
-    queryFn: () => api.get('/github/repos'),
+    queryKey: ['github-repos', selectedAccountId],
+    queryFn: () => getRepos(selectedAccountId || undefined),
+    enabled: !!selectedAccountId,
   });
 
   const [sourceType, setSourceType] = useState<SourceType>('my-repos');
@@ -256,62 +276,78 @@ export default function NewServerPage() {
 
           {sourceType === 'my-repos' ? (
             // My Repos Selection
-            selectedRepo ? (
-              <div className="flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-200">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-gray-900 flex items-center justify-center">
-                    <SiGithub className="w-6 h-6 text-white" />
-                  </div>
-                  <div>
-                    <p className="font-semibold text-gray-900">{selectedRepo.full_name}</p>
-                    <div className="flex items-center gap-2 mt-1 text-sm text-gray-500">
-                      {selectedRepo.private ? (
-                        <span className="inline-flex items-center gap-1">
-                          <Lock className="w-3.5 h-3.5" />
-                          Private
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1">
-                          <Globe className="w-3.5 h-3.5" />
-                          Public
-                        </span>
-                      )}
-                      {selectedRepo.language && (
-                        <>
-                          <span>·</span>
-                          <span>{selectedRepo.language}</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
+            <div className="space-y-3">
+              {/* GitHub Account Selector */}
+              <div>
+                <GitHubAccountSelector
+                  accounts={linkedAccounts || []}
+                  selectedAccountId={selectedAccountId}
+                  onSelect={(id) => {
+                    setSelectedAccountId(id);
                     setSelectedRepo(null);
                     setFormData(prev => ({ ...prev, github_repo: '', name: '', slug: '' }));
                   }}
-                  className="text-sm text-violet-600 hover:text-violet-700 font-medium"
-                >
-                  {tCommon('change')}
-                </button>
+                  returnTo="/dashboard/servers/new"
+                  isLoading={accountsLoading}
+                />
               </div>
-            ) : (
-              <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
-                <div className="p-3 border-b border-gray-100">
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50">
-                    <Search className="w-4 h-4 text-gray-400" />
-                    <input
-                      type="text"
-                      placeholder={t('create.searchRepos')}
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="flex-1 bg-transparent text-sm focus:outline-none"
-                    />
+
+              {selectedRepo ? (
+                <div className="flex items-center justify-between p-4 rounded-xl bg-gray-50 border border-gray-200">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-gray-900 flex items-center justify-center">
+                      <SiGithub className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-900">{selectedRepo.full_name}</p>
+                      <div className="flex items-center gap-2 mt-1 text-sm text-gray-500">
+                        {selectedRepo.private ? (
+                          <span className="inline-flex items-center gap-1">
+                            <Lock className="w-3.5 h-3.5" />
+                            Private
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1">
+                            <Globe className="w-3.5 h-3.5" />
+                            Public
+                          </span>
+                        )}
+                        {selectedRepo.language && (
+                          <>
+                            <span>·</span>
+                            <span>{selectedRepo.language}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedRepo(null);
+                      setFormData(prev => ({ ...prev, github_repo: '', name: '', slug: '' }));
+                    }}
+                    className="text-sm text-violet-600 hover:text-violet-700 font-medium"
+                  >
+                    {tCommon('change')}
+                  </button>
                 </div>
-                <div className="max-h-72 overflow-y-auto">
-                  {reposLoading ? (
+              ) : linkedAccounts && linkedAccounts.length > 0 ? (
+                <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+                  <div className="p-3 border-b border-gray-100">
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50">
+                      <Search className="w-4 h-4 text-gray-400" />
+                      <input
+                        type="text"
+                        placeholder={t('create.searchRepos')}
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="flex-1 bg-transparent text-sm focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto">
+                    {reposLoading || accountsLoading ? (
                     <div className="p-8 flex items-center justify-center">
                       <div className="w-8 h-8 border-4 rounded-full border-gray-200 border-t-violet-600 animate-spin" />
                     </div>
@@ -348,9 +384,10 @@ export default function NewServerPage() {
                       </button>
                     ))
                   )}
+                  </div>
                 </div>
-              </div>
-            )
+              ) : null}
+            </div>
           ) : (
             // Public URL Input
             <div className="space-y-3">

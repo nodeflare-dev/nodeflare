@@ -155,8 +155,17 @@ export default function LogsPage() {
 
   if (!servers || servers.length === 0) {
     return (
-      <div className="py-20 text-center text-gray-500">
-        {t('noServers')}
+      <div className="max-w-6xl">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-medium flex items-center gap-2 text-gray-400">
+            <FileText className="w-6 h-6" />
+            {t('title')}
+          </h1>
+        </div>
+        <div className="flex flex-col items-center justify-center py-20">
+          <FileText className="w-12 h-12 text-gray-300 mb-4" />
+          <p className="text-gray-400">{t('noServers')}</p>
+        </div>
       </div>
     );
   }

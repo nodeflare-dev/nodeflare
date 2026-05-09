@@ -699,12 +699,14 @@ pub async fn list_invoices(
         .map_err(db_error)?
         .ok_or((StatusCode::NOT_FOUND, "Workspace not found".to_string()))?;
 
-    let customer_id = workspace
-        .stripe_customer_id
-        .ok_or((StatusCode::NOT_FOUND, "No billing history for this workspace".to_string()))?;
+    // Return empty list if no stripe customer or billing not configured
+    let Some(customer_id) = workspace.stripe_customer_id else {
+        return Ok(Json(vec![]));
+    };
 
-    let billing = state.billing.as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Billing not configured".to_string()))?;
+    let Some(billing) = state.billing.as_ref() else {
+        return Ok(Json(vec![]));
+    };
 
     let invoices = billing
         .list_invoices(&customer_id, 100)
@@ -758,12 +760,14 @@ pub async fn list_subscription_history(
         .map_err(db_error)?
         .ok_or((StatusCode::NOT_FOUND, "Workspace not found".to_string()))?;
 
-    let customer_id = workspace
-        .stripe_customer_id
-        .ok_or((StatusCode::NOT_FOUND, "No billing history for this workspace".to_string()))?;
+    // Return empty list if no stripe customer or billing not configured
+    let Some(customer_id) = workspace.stripe_customer_id else {
+        return Ok(Json(vec![]));
+    };
 
-    let billing = state.billing.as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Billing not configured".to_string()))?;
+    let Some(billing) = state.billing.as_ref() else {
+        return Ok(Json(vec![]));
+    };
 
     let subscriptions = billing
         .list_subscriptions(&customer_id)
