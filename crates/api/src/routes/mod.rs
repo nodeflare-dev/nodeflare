@@ -52,10 +52,9 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route("/auth/ws-token", get(auth::ws_token))
         // GitHub
         .route("/github/repos", get(github::list_repositories))
-        // GitHub Account Linking
+        // GitHub Account Linking (callback handled by /auth/github/callback)
         .route("/github/accounts", get(github_accounts::list_accounts))
         .route("/github/accounts/link", get(github_accounts::link_account))
-        .route("/github/accounts/callback", get(github_accounts::link_callback))
         .route("/github/accounts/:account_id", delete(github_accounts::unlink_account))
         .route("/github/accounts/:account_id/primary", post(github_accounts::set_primary))
         // Workspaces
