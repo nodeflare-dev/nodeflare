@@ -1,13 +1,14 @@
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     Json,
 };
-use mcp_db::UserRepository;
+use mcp_db::LinkedGitHubAccountRepository;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use uuid::Uuid;
 
-use crate::error::db_error;
+use crate::error::{db_error, internal_error};
 use crate::extractors::AuthUser;
 use crate::state::AppState;
 
@@ -37,34 +38,47 @@ struct GitHubRepoResponse {
     language: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ReposQuery {
+    /// Optional account ID to fetch repositories from a specific linked GitHub account
+    pub account_id: Option<Uuid>,
+}
+
 pub async fn list_repositories(
     State(state): State<Arc<AppState>>,
     auth_user: AuthUser,
+    Query(params): Query<ReposQuery>,
 ) -> Result<Json<Vec<GitHubRepo>>, (StatusCode, String)> {
-    // Get user with encrypted GitHub token
-    let user = UserRepository::get_with_token(&state.db, auth_user.user_id)
-        .await
-        .map_err(db_error)?
-        .ok_or((StatusCode::NOT_FOUND, "User not found".to_string()))?;
+    // Get the GitHub access token from linked accounts
+    let linked_account = if let Some(account_id) = params.account_id {
+        // Use specific account
+        LinkedGitHubAccountRepository::get_with_token(&state.db, account_id, auth_user.user_id)
+            .await
+            .map_err(db_error)?
+    } else {
+        // Use primary or any linked account
+        LinkedGitHubAccountRepository::get_any_with_token(&state.db, auth_user.user_id)
+            .await
+            .map_err(db_error)?
+    };
 
-    // Decrypt GitHub access token
-    let (encrypted_token, nonce) = match (
-        user.github_access_token_encrypted,
-        user.github_access_token_nonce,
-    ) {
-        (Some(token), Some(nonce)) => (token, nonce),
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "GitHub token not found. Please re-authenticate.".to_string(),
-            ))
+    // If no linked account found, return empty array (not an error)
+    let linked_account = match linked_account {
+        Some(account) => account,
+        None => {
+            tracing::info!(
+                "No linked GitHub account for user {}",
+                auth_user.user_id
+            );
+            return Ok(Json(vec![]));
         }
     };
 
+    // Decrypt GitHub access token
     let access_token = state
         .crypto
-        .decrypt_string(&encrypted_token, &nonce)
-        .map_err(db_error)?;
+        .decrypt_string(&linked_account.access_token_encrypted, &linked_account.access_token_nonce)
+        .map_err(|e| internal_error("Token decryption failed", e))?;
 
     // Fetch repositories from GitHub
     let client = reqwest::Client::new();

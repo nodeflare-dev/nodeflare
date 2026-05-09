@@ -35,7 +35,21 @@ pub struct GitHubOAuth {
 }
 
 impl GitHubOAuth {
-    pub fn new(config: &AppConfig, redirect_url: &str) -> Result<Self> {
+    pub fn new(client_id: &str, client_secret: &str, redirect_url: &str) -> Self {
+        let http_client = reqwest::Client::builder()
+            .user_agent("MCP-Cloud/1.0")
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        Self {
+            client_id: client_id.to_string(),
+            client_secret: client_secret.to_string(),
+            redirect_url: redirect_url.to_string(),
+            http_client,
+        }
+    }
+
+    pub fn from_config(config: &AppConfig, redirect_url: &str) -> Result<Self> {
         let http_client = reqwest::Client::builder()
             .user_agent("MCP-Cloud/1.0")
             .build()
@@ -64,6 +78,22 @@ impl GitHubOAuth {
             &state
         );
         (url, state)
+    }
+
+    /// Generate authorization URL with custom state and scopes
+    pub fn get_authorization_url_with_state_and_scopes(&self, state: &str, scopes: &str) -> String {
+        let redirect_encoded = url::form_urlencoded::byte_serialize(self.redirect_url.as_bytes())
+            .collect::<String>();
+        let scopes_encoded = url::form_urlencoded::byte_serialize(scopes.as_bytes())
+            .collect::<String>();
+        format!(
+            "{}?client_id={}&redirect_uri={}&scope={}&state={}",
+            GITHUB_AUTH_URL,
+            &self.client_id,
+            redirect_encoded,
+            scopes_encoded,
+            state
+        )
     }
 
     pub async fn exchange_code(&self, code: &str) -> Result<String> {

@@ -10,7 +10,7 @@ mod contact_message_repo;
 mod announcement_repo;
 mod user_preferences_repo;
 
-pub use user_repo::UserRepository;
+pub use user_repo::{UserRepository, EmailVerificationTokenRepository};
 pub use workspace_repo::WorkspaceRepository;
 pub use server_repo::{ServerRepository, PlatformStats};
 pub use deployment_repo::DeploymentRepository;
@@ -39,3 +39,6 @@ pub use oauth_repo::{
 
 mod error_hint_repo;
 pub use error_hint_repo::ErrorHintRepository;
+
+mod linked_github_repo;
+pub use linked_github_repo::LinkedGitHubAccountRepository;

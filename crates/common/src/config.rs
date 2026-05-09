@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub redis: RedisConfig,
     pub auth: AuthConfig,
     pub github: GithubConfig,
+    pub google: GoogleConfig,
     pub flyio: FlyioConfig,
 }
 
@@ -154,6 +155,23 @@ impl Default for GithubConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct GoogleConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: String,
+}
+
+impl Default for GoogleConfig {
+    fn default() -> Self {
+        Self {
+            client_id: String::new(),
+            client_secret: String::new(),
+            redirect_uri: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct FlyioConfig {
     pub api_token: String,
     pub org_slug: String,
@@ -286,6 +304,11 @@ impl AppConfig {
                 app_id: env::var("GITHUB_APP_ID").unwrap_or_default(),
                 app_private_key: env::var("GITHUB_APP_PRIVATE_KEY").unwrap_or_default(),
                 webhook_secret: env::var("GITHUB_WEBHOOK_SECRET").unwrap_or_default(),
+            },
+            google: GoogleConfig {
+                client_id: env::var("GOOGLE_CLIENT_ID").unwrap_or_default(),
+                client_secret: env::var("GOOGLE_CLIENT_SECRET").unwrap_or_default(),
+                redirect_uri: env::var("GOOGLE_REDIRECT_URI").unwrap_or_default(),
             },
             flyio: FlyioConfig {
                 api_token: env::var("FLY_API_TOKEN").unwrap_or_default(),

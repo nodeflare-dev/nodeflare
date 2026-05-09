@@ -74,7 +74,7 @@ impl EmailService {
         let from_email = std::env::var("EMAIL_FROM")
             .unwrap_or_else(|_| "noreply@example.com".into());
         let from_name = std::env::var("EMAIL_FROM_NAME")
-            .unwrap_or_else(|_| "MCP Cloud".into());
+            .unwrap_or_else(|_| "NodeFlare".into());
 
         Self::new(api_key, from_email, from_name)
     }
@@ -143,7 +143,7 @@ impl EmailService {
         let html = crate::templates::team_invite(inviter_name, workspace_name, invite_url)?;
         self.send_email(
             to,
-            &format!("{} invited you to join {} on MCP Cloud", inviter_name, workspace_name),
+            &format!("{} invited you to join {} on NodeFlare", inviter_name, workspace_name),
             &html,
             Some(vec![("category", "team_invite")]),
         )
@@ -212,7 +212,7 @@ impl EmailService {
         let html = crate::templates::weekly_report(stats)?;
         self.send_email(
             to,
-            "Your weekly MCP Cloud report",
+            "Your weekly NodeFlare report",
             &html,
             Some(vec![("category", "weekly_report")]),
         )
@@ -233,6 +233,38 @@ impl EmailService {
             &format!("New contact from {}", sender_name),
             &html,
             Some(vec![("category", "contact")]),
+        )
+        .await
+    }
+
+    /// Send email verification link
+    pub async fn send_email_verification(
+        &self,
+        to: &str,
+        verification_url: &str,
+    ) -> Result<String, EmailError> {
+        let html = crate::templates::email_verification(verification_url)?;
+        self.send_email(
+            to,
+            "Verify your email address - NodeFlare",
+            &html,
+            Some(vec![("category", "email_verification")]),
+        )
+        .await
+    }
+
+    /// Send password reset link
+    pub async fn send_password_reset(
+        &self,
+        to: &str,
+        reset_url: &str,
+    ) -> Result<String, EmailError> {
+        let html = crate::templates::password_reset(reset_url)?;
+        self.send_email(
+            to,
+            "Reset your password - NodeFlare",
+            &html,
+            Some(vec![("category", "password_reset")]),
         )
         .await
     }

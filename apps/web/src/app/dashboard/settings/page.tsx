@@ -11,7 +11,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { getApiErrorMessage } from '@/types';
 import { locales, localeNames, Locale } from '@/i18n/config';
-import { Settings, Edit, LogOut, AlertTriangle, Trash2, AlertCircle, XCircle, ChevronDown, Check, Github } from 'lucide-react';
+import { Settings, Edit, LogOut, AlertTriangle, Trash2, AlertCircle, XCircle, ChevronDown, Check, Github, ChevronRight } from 'lucide-react';
+import Link from 'next/link';
 
 interface NotificationSettings {
   email_deploy_success: boolean;
@@ -202,29 +203,21 @@ export default function SettingsPage() {
       <section className="mb-8 sm:mb-10">
         <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3 sm:mb-4">{t('account.githubConnection')}</h2>
 
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 p-4 rounded-xl bg-white border border-gray-200 hover:border-gray-300 transition-colors">
+        <Link
+          href="/dashboard/settings/github"
+          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 p-4 rounded-xl bg-white border border-gray-200 hover:border-gray-300 transition-colors group"
+        >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gray-900 flex items-center justify-center">
               <Github className="w-5 h-5 text-white" />
             </div>
             <div>
-              <div className="font-medium text-gray-900">{user?.name}</div>
-              <div className="text-sm text-gray-500">{t('account.connectedAs', { name: user?.name ?? '' })}</div>
+              <div className="font-medium text-gray-900">{t('account.githubAccounts')}</div>
+              <div className="text-sm text-gray-500">{t('account.githubAccountsDesc')}</div>
             </div>
           </div>
-          <div className="flex items-center gap-3 justify-end sm:justify-start">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-              <span className="text-sm text-emerald-600 font-medium">{t('account.connected')}</span>
-            </div>
-            <button
-              onClick={handleReconnectGithub}
-              className="text-sm text-gray-500 hover:text-gray-700 px-3 py-1.5 rounded-lg hover:bg-gray-100 transition-colors"
-            >
-              {t('account.reconnect')}
-            </button>
-          </div>
-        </div>
+          <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
+        </Link>
       </section>
 
       {/* Email Notifications */}

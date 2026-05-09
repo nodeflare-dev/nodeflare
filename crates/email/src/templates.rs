@@ -32,14 +32,14 @@ fn wrap_template(content: &str) -> String {
 <body>
     <div class="container">
         <div class="header">
-            <div class="logo">MCP Cloud</div>
+            <div class="logo">NodeFlare</div>
         </div>
         <div class="content">
             {}
         </div>
         <div class="footer">
-            <p>MCP Cloud - Deploy MCP servers in seconds</p>
-            <p><a href="https://mcpcloud.dev">mcpcloud.dev</a></p>
+            <p>NodeFlare - Deploy MCP servers in seconds</p>
+            <p><a href="https://nodeflare.tech">nodeflare.tech</a></p>
         </div>
     </div>
 </body>
@@ -61,8 +61,8 @@ pub fn team_invite(inviter_name: &str, workspace_name: &str, invite_url: &str) -
     let content = format!(
         r#"
         <h2>You're invited to join a team!</h2>
-        <p><strong>{}</strong> has invited you to join <strong>{}</strong> on MCP Cloud.</p>
-        <p>MCP Cloud makes it easy to deploy and manage MCP (Model Context Protocol) servers for AI applications.</p>
+        <p><strong>{}</strong> has invited you to join <strong>{}</strong> on NodeFlare.</p>
+        <p>NodeFlare makes it easy to deploy and manage MCP (Model Context Protocol) servers for AI applications.</p>
         <p style="text-align: center; margin: 32px 0;">
             <a href="{}" class="button">Accept Invitation</a>
         </p>
@@ -206,6 +206,51 @@ pub fn contact_notification(sender_name: &str, sender_email: &str, message: &str
     Ok(wrap_template(&content))
 }
 
+/// Email verification template
+pub fn email_verification(verification_url: &str) -> Result<String, EmailError> {
+    let content = format!(
+        r#"
+        <h2>Verify Your Email Address</h2>
+        <p>Thank you for registering with NodeFlare!</p>
+        <p>Please click the button below to verify your email address and complete your registration:</p>
+        <p style="text-align: center; margin: 32px 0;">
+            <a href="{}" class="button">Verify Email</a>
+        </p>
+        <p style="font-size: 14px; color: #666;">
+            This link will expire in 24 hours.
+        </p>
+        <p style="font-size: 14px; color: #666;">
+            If you didn't create an account with NodeFlare, you can safely ignore this email.
+        </p>
+        "#,
+        escape_html(verification_url)
+    );
+    Ok(wrap_template(&content))
+}
+
+/// Password reset template
+pub fn password_reset(reset_url: &str) -> Result<String, EmailError> {
+    let content = format!(
+        r#"
+        <h2>Reset Your Password</h2>
+        <p>We received a request to reset the password for your NodeFlare account.</p>
+        <p>Click the button below to reset your password:</p>
+        <p style="text-align: center; margin: 32px 0;">
+            <a href="{}" class="button">Reset Password</a>
+        </p>
+        <div class="alert">
+            <div class="alert-title">Important</div>
+            <p>This link will expire in 1 hour for security reasons.</p>
+        </div>
+        <p style="font-size: 14px; color: #666;">
+            If you didn't request a password reset, you can safely ignore this email. Your password will not be changed.
+        </p>
+        "#,
+        escape_html(reset_url)
+    );
+    Ok(wrap_template(&content))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +266,19 @@ mod tests {
     #[test]
     fn test_escape_html() {
         assert_eq!(escape_html("<script>"), "&lt;script&gt;");
+    }
+
+    #[test]
+    fn test_email_verification_template() {
+        let html = email_verification("https://example.com/verify?token=abc123").unwrap();
+        assert!(html.contains("Verify Your Email"));
+        assert!(html.contains("https://example.com/verify?token=abc123"));
+    }
+
+    #[test]
+    fn test_password_reset_template() {
+        let html = password_reset("https://example.com/reset?token=abc123").unwrap();
+        assert!(html.contains("Reset Your Password"));
+        assert!(html.contains("https://example.com/reset?token=abc123"));
     }
 }

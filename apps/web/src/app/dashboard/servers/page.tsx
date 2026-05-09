@@ -112,14 +112,10 @@ export default function ServersPage() {
           </CardContent>
         </Card>
       ) : servers?.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <p className="text-muted-foreground mb-4">{t('empty')}</p>
-            <Link href="/dashboard/servers/new">
-              <Button>{t('createFirst')}</Button>
-            </Link>
-          </CardContent>
-        </Card>
+        <div className="flex flex-col items-center justify-center py-20">
+          <Server className="w-12 h-12 text-gray-300 mb-4" />
+          <p className="text-gray-400">{t('empty')}</p>
+        </div>
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
           {servers?.map((server) => (

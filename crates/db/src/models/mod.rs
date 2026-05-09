@@ -36,3 +36,6 @@ pub use oauth::*;
 
 mod error_hint;
 pub use error_hint::*;
+
+mod linked_github;
+pub use linked_github::*;
