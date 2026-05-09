@@ -9,7 +9,8 @@ use fred::interfaces::KeysInterface;
 use mcp_auth::{GitHubOAuth, GoogleOAuth, hash_password, verify_password};
 use mcp_common::types::{AuthResponse, RefreshTokenRequest, UserResponse};
 use mcp_db::{
-    CreateUserFromEmail, EmailVerificationTokenRepository, TokenType, UserRepository, WorkspaceRepository,
+    CreateLinkedGitHubAccount, CreateUserFromEmail, EmailVerificationTokenRepository,
+    LinkedGitHubAccountRepository, TokenType, UserRepository, WorkspaceRepository,
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -193,6 +194,15 @@ pub async fn github_callback(
         ));
     }
 
+    // Delete used CSRF token (one-time use)
+    let _ = state.redis.del::<(), _>(&csrf_key).await;
+
+    // Check if this is a "link account" flow (format: "link|user_id|return_to")
+    let csrf_value_str = csrf_value.as_ref().unwrap();
+    if csrf_value_str.starts_with("link|") {
+        return handle_github_link_callback(state, query, csrf_value_str, &ip).await;
+    }
+
     // Extract return_to from Redis value if present (format: "1|return_to_url")
     let return_to: Option<String> = csrf_value.as_ref().and_then(|v| {
         if let Some(idx) = v.find('|') {
@@ -201,9 +211,6 @@ pub async fn github_callback(
             None
         }
     });
-
-    // Delete used CSRF token (one-time use)
-    let _ = state.redis.del::<(), _>(&csrf_key).await;
 
     let redirect_url = if state.config.github.redirect_uri.is_empty() {
         format!(
@@ -390,6 +397,128 @@ pub async fn github_callback(
     }
 
     Ok((StatusCode::TEMPORARY_REDIRECT, headers, ()).into_response())
+}
+
+/// Handle GitHub OAuth callback for account linking flow
+/// Called when csrf_value starts with "link|" (format: "link|user_id|return_to")
+async fn handle_github_link_callback(
+    state: Arc<AppState>,
+    query: GitHubCallbackQuery,
+    csrf_value: &str,
+    _ip: &str,
+) -> Result<Response, (StatusCode, String)> {
+    // Parse "link|user_id|return_to" format
+    let parts: Vec<&str> = csrf_value.splitn(3, '|').collect();
+    if parts.len() < 2 {
+        return Err((StatusCode::BAD_REQUEST, "Invalid state data".to_string()));
+    }
+
+    let user_id = uuid::Uuid::parse_str(parts[1]).map_err(|_| {
+        (StatusCode::BAD_REQUEST, "Invalid user ID in state".to_string())
+    })?;
+    let return_to = parts.get(2).map(|s| s.to_string()).filter(|s| !s.is_empty());
+
+    // Build redirect URL for token exchange
+    let redirect_url = if state.config.github.redirect_uri.is_empty() {
+        format!(
+            "{}://{}:{}/api/v1/auth/github/callback",
+            if state.config.is_production() { "https" } else { "http" },
+            state.config.server.host,
+            state.config.server.port
+        )
+    } else {
+        state.config.github.redirect_uri.clone()
+    };
+
+    let oauth = GitHubOAuth::from_config(&state.config, &redirect_url)
+        .map_err(|e| internal_error("OAuth initialization failed", e))?;
+
+    // Exchange code for access token
+    let access_token = oauth
+        .exchange_code(&query.code)
+        .await
+        .map_err(|e| {
+            tracing::error!("GitHub code exchange failed for link: {}", e);
+            (StatusCode::BAD_REQUEST, "GitHub authentication failed".to_string())
+        })?;
+
+    // Get GitHub user info
+    let github_user = oauth
+        .get_user(&access_token)
+        .await
+        .map_err(|e| {
+            tracing::error!("GitHub get user failed for link: {}", e);
+            (StatusCode::BAD_REQUEST, "Failed to get GitHub user info".to_string())
+        })?;
+
+    // Check if this GitHub account is already linked to this user
+    if let Some(existing) = LinkedGitHubAccountRepository::find_by_github_id(
+        &state.db,
+        user_id,
+        github_user.id,
+    )
+    .await
+    .map_err(db_error)?
+    {
+        // Update the token for existing linked account
+        let encrypted = state
+            .crypto
+            .encrypt_string(&access_token)
+            .map_err(|e| internal_error("Token encryption failed", e))?;
+
+        LinkedGitHubAccountRepository::update_token(
+            &state.db,
+            existing.id,
+            user_id,
+            &encrypted.0,
+            &encrypted.1,
+            Some("repo,user:email"),
+        )
+        .await
+        .map_err(db_error)?;
+
+        tracing::info!(
+            "Updated GitHub account token: user={}, github_user={}",
+            user_id,
+            github_user.login
+        );
+    } else {
+        // Create new linked account
+        let encrypted = state
+            .crypto
+            .encrypt_string(&access_token)
+            .map_err(|e| internal_error("Token encryption failed", e))?;
+
+        LinkedGitHubAccountRepository::create(
+            &state.db,
+            CreateLinkedGitHubAccount {
+                user_id,
+                github_id: github_user.id,
+                github_username: github_user.login.clone(),
+                github_avatar_url: github_user.avatar_url.clone(),
+                access_token_encrypted: encrypted.0,
+                access_token_nonce: encrypted.1,
+                scopes: Some("repo,user:email".to_string()),
+            },
+        )
+        .await
+        .map_err(db_error)?;
+
+        tracing::info!(
+            "Linked GitHub account: user={}, github_user={}",
+            user_id,
+            github_user.login
+        );
+    }
+
+    // Redirect to frontend
+    let redirect_url = if let Some(return_to) = return_to {
+        format!("{}{}?success=github_linked", state.config.server.frontend_url, return_to)
+    } else {
+        format!("{}/dashboard/settings/github?success=github_linked", state.config.server.frontend_url)
+    };
+
+    Ok(Redirect::temporary(&redirect_url).into_response())
 }
 
 /// Extract domain from URL for cookie domain setting
