@@ -724,14 +724,31 @@ async fn handle_build_job(job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Resu
                     .ok();
             }
 
-            // Only set server to failed if this is the latest deployment
-            // Prevents old failed deployments from overwriting newer successful ones
-            let should_set_failed = match DeploymentRepository::find_latest_by_server(&ctx.db, job.server_id).await {
-                Ok(Some(latest)) => latest.id == job.deployment_id,
-                _ => true, // If we can't check, err on the side of updating
-            };
+            // Only set server to failed if there's no newer successful deployment
+            // This prevents race conditions where an old failed deployment (due to retries)
+            // overwrites a newer successful deployment's status
+            let current_version = DeploymentRepository::find_by_id(&ctx.db, job.deployment_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|d| d.version)
+                .unwrap_or(0);
 
-            if should_set_failed {
+            let has_newer_success = DeploymentRepository::has_succeeded_deployment_after(
+                &ctx.db,
+                job.server_id,
+                current_version,
+            )
+            .await
+            .unwrap_or(false);
+
+            if has_newer_success {
+                tracing::info!(
+                    "Skipping server status update to Failed for deployment {} (version {}) - newer successful deployment exists",
+                    job.deployment_id,
+                    current_version
+                );
+            } else {
                 if let Err(e) = ServerRepository::update_status(
                     &ctx.db,
                     job.server_id,
@@ -742,11 +759,6 @@ async fn handle_build_job(job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Resu
                 {
                     tracing::error!("Failed to update server status to Failed: {}", e);
                 }
-            } else {
-                tracing::info!(
-                    "Skipping server status update to Failed for deployment {} - newer deployment exists",
-                    job.deployment_id
-                );
             }
 
             // Send failure email notification
@@ -811,14 +823,39 @@ async fn handle_build_failure(ctx: &BuilderContext, job: &BuildJob, error_msg: &
             .ok();
     }
 
-    ServerRepository::update_status(
+    // Only set server to failed if there's no newer successful deployment
+    // This prevents race conditions where an old failed deployment overwrites a newer success
+    let current_version = DeploymentRepository::find_by_id(&ctx.db, job.deployment_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|d| d.version)
+        .unwrap_or(0);
+
+    let has_newer_success = DeploymentRepository::has_succeeded_deployment_after(
         &ctx.db,
         job.server_id,
-        mcp_common::types::ServerStatus::Failed,
-        None,
+        current_version,
     )
     .await
-    .ok();
+    .unwrap_or(false);
+
+    if !has_newer_success {
+        ServerRepository::update_status(
+            &ctx.db,
+            job.server_id,
+            mcp_common::types::ServerStatus::Failed,
+            None,
+        )
+        .await
+        .ok();
+    } else {
+        tracing::info!(
+            "Skipping server status update to Failed for deployment {} (version {}) - newer successful deployment exists",
+            job.deployment_id,
+            current_version
+        );
+    }
 
     send_deploy_notification(ctx, job.server_id, false, Some(&full_error_msg)).await;
 }

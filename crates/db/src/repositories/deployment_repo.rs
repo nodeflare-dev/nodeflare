@@ -220,4 +220,29 @@ impl DeploymentRepository {
 
         Ok(result.rows_affected())
     }
+
+    /// Check if there's a succeeded deployment with version greater than the given version
+    /// Used to prevent race conditions where an old failed deployment overwrites a newer success
+    pub async fn has_succeeded_deployment_after(
+        pool: &PgPool,
+        server_id: Uuid,
+        version: i32,
+    ) -> Result<bool> {
+        let result: Option<(i32,)> = sqlx::query_as(
+            r#"
+            SELECT 1
+            FROM deployments
+            WHERE server_id = $1
+              AND version > $2
+              AND status = 'succeeded'
+            LIMIT 1
+            "#,
+        )
+        .bind(server_id)
+        .bind(version)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(result.is_some())
+    }
 }
