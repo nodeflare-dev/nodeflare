@@ -232,11 +232,11 @@ export default function SignupPage() {
                 {/* Terms */}
                 <p className="mt-4 text-center text-xs text-gray-500">
                   {t('terms')}{' '}
-                  <Link href="/terms" className="text-violet-600 hover:text-violet-700">
+                  <Link href="/legal/terms" className="text-violet-600 hover:text-violet-700">
                     {t('termsOfService')}
                   </Link>{' '}
                   {t('and')}{' '}
-                  <Link href="/privacy" className="text-violet-600 hover:text-violet-700">
+                  <Link href="/legal/privacy" className="text-violet-600 hover:text-violet-700">
                     {t('privacyPolicy')}
                   </Link>
                 </p>
