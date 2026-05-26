@@ -58,8 +58,12 @@ tsconfig.tsbuildinfo
 
 # Internal/operational docs (Japanese)
 docs/infrastructure-cost-analysis.md
+docs/maintenance-operations.json
 docs/アーキテクチャ.md
 docs/セキュリティ.md
 docs/デプロイ手順.md
 docs/ユーザーガイド.md
 docs/開発ガイド.md
+
+# Agency LP (separate repository)
+apps/agency/
