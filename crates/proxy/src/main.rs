@@ -205,8 +205,26 @@ struct ProtectedResourceMetadata {
 async fn protected_resource_metadata(
     State(state): State<Arc<ProxyState>>,
     Host(host): Host,
-) -> Json<ProtectedResourceMetadata> {
+) -> Response {
     tracing::info!("Protected resource metadata requested from proxy, host={}", host);
+
+    // If the target server has NodeFlare auth disabled, do NOT advertise OAuth
+    // protected-resource metadata. Otherwise MCP clients (which probe this endpoint
+    // during discovery per RFC 9728) would enforce auth client-side even though the
+    // proxy forwards requests without requiring any credentials.
+    // Note: if the subdomain can't be resolved to a running server we fall through to
+    // the previous behavior (advertise metadata) to avoid changing edge-case responses.
+    if let Ok(slug) = extract_subdomain(&host, &state.config.server.proxy_base_domain) {
+        if let Ok(server) = resolve_server(&state, &slug).await {
+            if !server.auth_enabled {
+                tracing::info!(
+                    "Auth disabled for server {}, not advertising OAuth protected-resource metadata",
+                    slug
+                );
+                return StatusCode::NOT_FOUND.into_response();
+            }
+        }
+    }
 
     let api_url = std::env::var("API_URL").unwrap_or_else(|_| {
         format!("http://{}:{}", state.config.server.host, state.config.server.port)
@@ -232,6 +250,7 @@ async fn protected_resource_metadata(
             "prompts:get".to_string(),
         ],
     })
+    .into_response()
 }
 
 async fn proxy_handler(
