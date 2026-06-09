@@ -115,6 +115,7 @@ impl CachedServer {
             mcp_path: self.mcp_path.clone(),
             transport: "sse".to_string(),
             entry_command: None,
+            build_command: None,
             auth_enabled: self.auth_enabled,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),

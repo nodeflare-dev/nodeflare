@@ -230,6 +230,7 @@ pub async fn rollback(
         mcp_path: server.mcp_path,
         transport: server.transport,
         entry_command: server.entry_command,
+        build_command: server.build_command,
     };
 
     state

@@ -535,6 +535,22 @@ export default function NewServerPage() {
                   </div>
                 </div>
 
+                <div>
+                  <Label htmlFor="build_command" className="text-gray-700">{t('create.buildCommand')}</Label>
+                  <p className="text-xs text-gray-500 mt-1 mb-2">{t('create.buildCommandHelp')}</p>
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white">
+                    <Terminal className="w-4 h-4 text-gray-400" />
+                    <input
+                      id="build_command"
+                      type="text"
+                      placeholder="npm run build"
+                      value={formData.build_command || ''}
+                      onChange={(e) => setFormData(prev => ({ ...prev, build_command: e.target.value || undefined }))}
+                      className="flex-1 bg-transparent text-sm focus:outline-none font-mono"
+                    />
+                  </div>
+                </div>
+
                 {/* Auth Enabled Toggle */}
                 <div className="pt-4 border-t border-gray-100">
                   <div className="flex items-start gap-3">

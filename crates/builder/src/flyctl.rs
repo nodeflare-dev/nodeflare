@@ -248,38 +248,68 @@ fn generate_dockerfile(
     existing_dockerfile: Option<&str>,
     existing_entry_command: Option<&str>,
     entry_command: Option<&str>,
+    build_command: Option<&str>,
     project: &ProjectStructure,
 ) -> String {
     // For SSE transport, use standard Dockerfiles
     if transport != "stdio" {
-        return generate_sse_dockerfile(runtime, project);
+        return generate_sse_dockerfile(runtime, build_command, project);
     }
 
     // For STDIO transport, generate Dockerfile that includes the adapter
-    generate_stdio_dockerfile(runtime, mcp_path, existing_dockerfile, existing_entry_command, entry_command, project)
+    generate_stdio_dockerfile(runtime, mcp_path, existing_dockerfile, existing_entry_command, entry_command, build_command, project)
+}
+
+/// Build step for the Node image-build stage.
+/// If the user supplied a custom `build_command`, run exactly that; otherwise run the
+/// project's own `build` npm script when present (a no-op if the script is absent).
+fn node_build_step(build_command: Option<&str>) -> String {
+    match build_command {
+        Some(cmd) if !cmd.trim().is_empty() => format!("RUN {}", cmd.trim()),
+        _ => "RUN npm run build --if-present".to_string(),
+    }
+}
+
+/// Optional build step for runtimes that have no sensible default build.
+/// Emits a `RUN <build_command>` line only when the user supplied one, else nothing.
+fn optional_build_step(build_command: Option<&str>) -> String {
+    match build_command {
+        Some(cmd) if !cmd.trim().is_empty() => format!("RUN {}\n", cmd.trim()),
+        _ => String::new(),
+    }
 }
 
 /// Generate standard Dockerfile for SSE transport
-fn generate_sse_dockerfile(runtime: &str, project: &ProjectStructure) -> String {
+fn generate_sse_dockerfile(runtime: &str, build_command: Option<&str>, project: &ProjectStructure) -> String {
     match runtime {
-        "node" => r#"FROM node:20-slim
+        "node" => {
+            // Custom build_command if set, else the project's own `build` script (no-op if absent).
+            let build_step = node_build_step(build_command);
+            format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production 2>/dev/null || npm install --only=production
+# Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.
+RUN npm ci 2>/dev/null || npm install
 COPY . .
+# Run the project's own build script if it declares one (tsc/esbuild/etc.).
+# Output path is the project's concern; we don't hardcode it.
+{build_step}
 EXPOSE 3000
 CMD ["node", "index.js"]
-"#.to_string(),
+"#)
+        },
         "python" => {
             let entry = project.python_entry.as_deref().unwrap_or("main.py");
             let install_deps = generate_python_install_deps(project);
+            // Optional custom build (e.g. a codegen/compile step) only when set.
+            let build_step = optional_build_step(build_command);
             format!(r#"FROM python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 {install_deps}
-EXPOSE 8000
+{build_step}EXPOSE 8000
 CMD ["python", "{entry}"]
 "#)
         },
@@ -347,6 +377,7 @@ fn generate_stdio_dockerfile(
     existing_dockerfile: Option<&str>,
     existing_entry_command: Option<&str>,
     entry_command: Option<&str>,
+    build_command: Option<&str>,
     project: &ProjectStructure,
 ) -> String {
     // Priority for entry command:
@@ -379,6 +410,8 @@ fn generate_stdio_dockerfile(
                         format!(", {}", extra_args.iter().map(|a| format!("\"{}\"", a)).collect::<Vec<_>>().join(", "))
                     };
 
+                    // npx packages are prebuilt; only run a build when the user explicitly set one.
+                    let build_step = optional_build_step(build_command);
                     return format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -387,7 +420,7 @@ RUN npm install -g {package}
 COPY package*.json ./
 RUN npm ci --only=production 2>/dev/null || npm install --only=production || true
 COPY . .
-# STDIO adapter is already copied to source directory
+{build_step}# STDIO adapter is already copied to source directory
 ENV PORT=3000
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
@@ -408,12 +441,18 @@ CMD ["node", "stdio-adapter.cjs", "npx", "{package}"{extra_args_str}]
                 r#""node", "index.js""#.to_string()
             };
 
+            // Custom build_command if set, else the project's own `build` script (no-op if absent).
+            let build_step = node_build_step(build_command);
             format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production 2>/dev/null || npm install --only=production
+# Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.
+RUN npm ci 2>/dev/null || npm install
 COPY . .
+# Run the project's own build script if it declares one (tsc/esbuild/etc.).
+# Output path is the project's concern; we don't hardcode it.
+{build_step}
 # STDIO adapter is already copied to source directory
 ENV PORT=3000
 ENV MCP_PATH="{mcp_path}"
@@ -434,6 +473,8 @@ CMD ["node", "stdio-adapter.cjs", {node_cmd}]
             };
 
             let install_deps = generate_python_install_deps(project);
+            // Optional custom build (e.g. a codegen/compile step) only when set.
+            let build_step = optional_build_step(build_command);
 
             format!(r#"FROM python:3.11-slim
 # Install Node.js for the STDIO-to-SSE adapter
@@ -441,7 +482,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends procps curl nod
 WORKDIR /app
 COPY . .
 {install_deps}
-ENV PORT=8000
+{build_step}ENV PORT=8000
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
 EXPOSE 8000
@@ -813,6 +854,7 @@ pub async fn build_and_deploy(
             existing_dockerfile.as_deref(),
             existing_entry_command.as_deref(),
             job.entry_command.as_deref(),
+            job.build_command.as_deref(),
             &project,
         );
         tokio::fs::write(&dockerfile_path, &dockerfile_content)

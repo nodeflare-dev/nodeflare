@@ -50,7 +50,7 @@ export default function PricingPage() {
         {/* Hero */}
         <section className="py-20">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center">
-            <h1 className="text-xl sm:text-2xl font-extrabold mb-8" style={{ color: '#333333' }}>
+            <h1 className="text-xl sm:text-2xl font-extrabold mb-8" style={{ color: '#323232' }}>
               {t('title')}
             </h1>
 
@@ -89,21 +89,21 @@ export default function PricingPage() {
                 return (
                   <div key={plan.plan} className="relative group">
                     {isPopular && (
-                      <div className="absolute -inset-[1px] bg-violet-500 rounded-2xl" />
+                      <div className="absolute -inset-[1.5px] bg-violet-500 rounded-2xl" />
                     )}
                     <div
                       className={`relative rounded-2xl p-8 h-full flex flex-col ${
                         isPopular
-                          ? 'bg-gray-900 text-white'
+                          ? 'bg-white'
                           : 'bg-white border border-gray-200 hover:border-gray-300 hover:shadow-lg transition-all'
                       }`}
                     >
                       <div className="flex items-center gap-2 mb-2">
-                        <span className={`text-sm font-medium ${isPopular ? 'text-violet-300' : 'text-gray-500'}`}>
+                        <span className={`text-sm font-medium ${isPopular ? 'text-violet-600' : 'text-gray-500'}`}>
                           {plan.name}
                         </span>
                         {isPopular && (
-                          <span className="px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-xs font-medium">
+                          <span className="px-2.5 py-0.5 rounded-full bg-violet-100 text-violet-700 text-xs font-medium">
                             {t('recommended')}
                           </span>
                         )}
@@ -111,17 +111,17 @@ export default function PricingPage() {
 
                       <div className="flex items-baseline gap-1 mb-2">
                         {isEnterprise ? (
-                          <span className="text-2xl font-bold">{t('contactUs')}</span>
+                          <span className="text-2xl font-bold text-[#323232]">{t('contactUs')}</span>
                         ) : (
                           <>
-                            <span className="text-4xl font-bold">{formatPrice(monthlyEquivalent)}</span>
-                            <span className={isPopular ? 'text-gray-400' : 'text-gray-500'}>{t('perMonth')}</span>
+                            <span className="text-4xl font-bold text-[#323232]">{formatPrice(monthlyEquivalent)}</span>
+                            <span className="text-gray-500">{t('perMonth')}</span>
                           </>
                         )}
                       </div>
 
                       {isYearly && price !== null && price > 0 && (
-                        <p className={`text-sm mb-4 ${isPopular ? 'text-gray-400' : 'text-gray-500'}`}>
+                        <p className="text-sm mb-4 text-gray-500">
                           {t('yearlyPrice', { price: formatPrice(price) })}
                         </p>
                       )}
@@ -131,15 +131,15 @@ export default function PricingPage() {
                         </p>
                       )}
 
-                      <p className={`mb-6 ${isPopular ? 'text-gray-400' : 'text-gray-600'}`}>
+                      <p className="mb-6 text-gray-600">
                         {plan.description}
                       </p>
 
                       <ul className="space-y-3 mb-8">
                         {plan.features.map((feature) => (
                           <li key={feature} className="flex items-center gap-3 text-sm">
-                            <Check className={`w-5 h-5 flex-shrink-0 ${isPopular ? 'text-violet-400' : 'text-gray-400'}`} strokeWidth={2.5} />
-                            <span className={isPopular ? 'text-gray-200' : 'text-gray-700'}>
+                            <Check className={`w-5 h-5 flex-shrink-0 ${isPopular ? 'text-violet-600' : 'text-gray-400'}`} strokeWidth={2.5} />
+                            <span className="text-gray-700">
                               {feature}
                             </span>
                           </li>

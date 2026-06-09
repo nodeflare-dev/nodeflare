@@ -56,7 +56,7 @@ export function BlogSection() {
             <span className="inline-block text-violet-600 text-sm font-medium mb-4">
               {t('blog.badge')}
             </span>
-            <h2 className="text-2xl sm:text-3xl font-extrabold" style={{ color: '#333333' }}>{t('blog.title')}</h2>
+            <h2 className="text-2xl sm:text-3xl font-extrabold" style={{ color: '#323232' }}>{t('blog.title')}</h2>
           </div>
           <Link href="/blog" className="hidden sm:flex items-center gap-2 text-violet-600 hover:text-violet-700 font-medium group">
             {t('blog.viewAll')}

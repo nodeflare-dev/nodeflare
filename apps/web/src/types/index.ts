@@ -44,6 +44,8 @@ export interface McpServer {
   mcp_path: string;
   /** Custom entry command for the MCP server (e.g., "python server.py", "uv run mcp-server") */
   entry_command: string | null;
+  /** Custom build command run at image-build time (e.g., "npm run build", "npm run compile") */
+  build_command: string | null;
   /** When false, NodeFlare authentication is disabled (for servers with their own auth) */
   auth_enabled: boolean;
   created_at: string;
@@ -157,6 +159,8 @@ export interface CreateServerRequest {
   mcp_path?: string;
   /** Custom entry command for the MCP server (e.g., "python server.py", "uv run mcp-server") */
   entry_command?: string;
+  /** Custom build command run at image-build time (e.g., "npm run build", "npm run compile") */
+  build_command?: string;
   /** When false, skip NodeFlare authentication layer (for servers that handle their own auth) */
   auth_enabled?: boolean;
 }
@@ -172,6 +176,8 @@ export interface UpdateServerRequest {
   mcp_path?: string;
   /** Custom entry command for the MCP server (e.g., "python server.py", "uv run mcp-server") */
   entry_command?: string;
+  /** Custom build command run at image-build time (e.g., "npm run build", "npm run compile") */
+  build_command?: string;
   /** When false, skip NodeFlare authentication layer (for servers that handle their own auth) */
   auth_enabled?: boolean;
 }

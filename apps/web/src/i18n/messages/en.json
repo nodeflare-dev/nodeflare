@@ -51,11 +51,24 @@
     "billing": "Plans & Billing"
   },
   "home": {
+    "discord": {
+      "title": "Where the latest MCPs live",
+      "description": "On Discord, newly released MCP servers are shared all the time, and the community keeps posting automation use-cases and tips built with MCP. Catch the latest first and grow your setup together with everyone.",
+      "cta": "Join Discord",
+      "chat": {
+        "msg1": "Found a new Notion MCP — looks super useful 👇",
+        "msg2": "Built an auto-summarizer for Slack meeting notes with it 🔥",
+        "msg3": "Pinned this week's roundup of newly released MCPs 📌",
+        "input": "Message #mcp-updates"
+      }
+    },
     "title": "MCP Hosting - Nodeflare",
-    "heroTitle1": "MCP",
-    "heroTitle2": "Hosting",
-    "heroDescription1": "Auto-convert GitHub stdio MCPs to SSE format.",
-    "heroDescription2": "Delegate all authentication implementation.",
+    "heroTitle1": "For MCP, go with",
+    "heroTitle2": "NodeFlare",
+    "heroTitle3": "",
+    "heroDescription1": "Just hand us your GitHub MCP repo—we auto-convert your stdio server into an SSE-ready endpoint.",
+    "heroDescription2": "OAuth 2.0 auth is built in, so you can go live in minutes with zero infrastructure to manage.",
+    "heroBadge": "Deploy MCP servers in minutes",
     "startWithGithub": "Start with GitHub",
     "getStarted": "Get Started",
     "dashboard": {
@@ -84,7 +97,7 @@
     },
     "features": {
       "badge": "Why Nodeflare?",
-      "title": "What Nodeflare Can Do",
+      "title": "Everything you need to run MCPs in production, all in one place.",
       "zeroConfig": {
         "title": "stdio→SSE Auto-Convert",
         "desc": "Auto-convert any stdio MCP from GitHub to SSE by just specifying the URL. No fork needed, deploy instantly."
@@ -110,11 +123,18 @@
       "badge": "Access Control",
       "title": "No Need to\nImplement Auth",
       "description": "No auth code needed in your MCP server. Nodeflare handles token authentication, per-tool permissions, and audit logging for you.",
+      "descriptionExtra": "Bearer Token and OAuth 2.0 are attached automatically, and you can allow or deny tools/call on a per-method basis. Every request is recorded in audit logs, so you can always trace who called which tool and when—all without changing a single line of code in your MCP.",
       "tokenAuth": "Bearer Token / OAuth 2.0 auto-attached",
       "toolPermission": "Allow/deny tools/call per method",
       "accessLog": "Audit logs recorded per request",
       "noCode": "Zero code changes to your MCP",
       "codeComment": "Search Notion pages"
+    },
+    "bareMetal": {
+      "badge": "Bare Metal",
+      "title": "Cheaper and Faster Than Anywhere Else",
+      "description": "From August 2026, we're moving to dedicated bare-metal servers. By leaving shared environments behind and owning the full resources, we deliver hosting that's cheaper and faster than anywhere else.",
+      "descriptionExtra": "Physical servers with zero overhead mean no compromise on latency or price—making production MCP hosting smoother than ever."
     },
     "pricing": {
       "badge": "Pricing",
@@ -293,6 +313,8 @@
       "mcpPathAutoStdio": "Automatically set to /mcp for STDIO transport",
       "entryCommand": "Entry Command",
       "entryCommandHelp": "Custom command to start the server (e.g., python server.py, uv run mcp-server). If empty, auto-detected based on project structure.",
+      "buildCommand": "Build Command",
+      "buildCommandHelp": "Custom command to build the server before starting (e.g., npm run build, npm run compile). If empty, Node projects run their 'build' npm script automatically when present.",
       "authEnabled": "Enable NodeFlare Authentication",
       "authEnabledHelp": "When disabled, NodeFlare's authentication layer is skipped. Use this when your MCP server handles its own authentication (e.g., Notion API).",
       "authDisabledWarning": "Authentication is disabled. Make sure your MCP server handles authentication itself.",

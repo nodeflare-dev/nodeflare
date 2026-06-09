@@ -14,17 +14,17 @@ export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <header className="bg-white border-b border-gray-100">
+    <header className="relative z-20">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2">
           <img src="/logo.png" alt="Nodeflare" className="h-7 sm:h-8 w-auto" />
-          <span className="text-base sm:text-lg font-black text-gray-900">NodeFlare</span>
+          <span className="text-base sm:text-lg font-black text-[#323232]">NodeFlare</span>
         </Link>
 
         <nav className="hidden md:flex items-center gap-8">
-          <Link href="/docs" className="text-sm font-medium text-gray-600 hover:text-gray-900">{t('docs')}</Link>
-          <Link href="/pricing" className="text-sm font-medium text-gray-600 hover:text-gray-900">Pricing</Link>
-          <Link href="/blog" className="text-sm font-medium text-gray-600 hover:text-gray-900">{t('blog')}</Link>
+          <Link href="/docs" className="text-sm font-medium text-[#323232] hover:text-gray-900">{t('docs')}</Link>
+          <Link href="/pricing" className="text-sm font-medium text-[#323232] hover:text-gray-900">Pricing</Link>
+          <Link href="/blog" className="text-sm font-medium text-[#323232] hover:text-gray-900">{t('blog')}</Link>
         </nav>
 
         <div className="flex items-center gap-2 sm:gap-3">
@@ -85,21 +85,21 @@ export function Header() {
           <nav className="max-w-6xl mx-auto px-4 py-4 space-y-1">
             <Link
               href="/docs"
-              className="block px-3 py-2.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg"
+              className="block px-3 py-2.5 text-sm font-medium text-[#323232] hover:text-gray-900 hover:bg-gray-50 rounded-lg"
               onClick={() => setMobileMenuOpen(false)}
             >
               {t('docs')}
             </Link>
             <Link
               href="/pricing"
-              className="block px-3 py-2.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg"
+              className="block px-3 py-2.5 text-sm font-medium text-[#323232] hover:text-gray-900 hover:bg-gray-50 rounded-lg"
               onClick={() => setMobileMenuOpen(false)}
             >
               Pricing
             </Link>
             <Link
               href="/blog"
-              className="block px-3 py-2.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg"
+              className="block px-3 py-2.5 text-sm font-medium text-[#323232] hover:text-gray-900 hover:bg-gray-50 rounded-lg"
               onClick={() => setMobileMenuOpen(false)}
             >
               {t('blog')}

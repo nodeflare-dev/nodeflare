@@ -27,6 +27,9 @@ pub struct BuildJob {
     /// Custom entry command (e.g., "python server.py", "uv run mcp-server")
     /// If None, auto-detect based on project structure
     pub entry_command: Option<String>,
+    /// Custom build command run at image-build time (e.g., "npm run build", "npm run compile")
+    /// If None, fall back to the runtime default (Node: `npm run build --if-present`)
+    pub build_command: Option<String>,
 }
 
 impl BuildJob {
@@ -51,6 +54,7 @@ impl BuildJob {
             mcp_path: server.mcp_path.clone(),
             transport: server.transport.clone(),
             entry_command: server.entry_command.clone(),
+            build_command: server.build_command.clone(),
         }
     }
 }

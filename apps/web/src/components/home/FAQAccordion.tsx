@@ -22,7 +22,7 @@ export function FAQAccordion() {
           <span className="inline-block text-violet-600 text-sm font-medium mb-4">
             {t('faq.badge')}
           </span>
-          <h2 className="text-2xl sm:text-3xl font-extrabold mb-3" style={{ color: '#333333' }}>{t('faq.title')}</h2>
+          <h2 className="text-2xl sm:text-3xl font-semibold mb-3" style={{ color: '#323232' }}>{t('faq.title')}</h2>
           <p className="text-lg text-gray-600">{t('faq.subtitle')}</p>
         </div>
 

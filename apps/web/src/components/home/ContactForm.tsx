@@ -76,7 +76,7 @@ export function ContactForm() {
           <span className="inline-block text-violet-600 text-sm font-medium mb-4">
             {t('contact.badge')}
           </span>
-          <h2 className="text-2xl sm:text-3xl font-extrabold mb-3" style={{ color: '#333333' }}>{t('contact.title')}</h2>
+          <h2 className="text-2xl sm:text-3xl font-extrabold mb-3" style={{ color: '#323232' }}>{t('contact.title')}</h2>
           <p className="text-gray-600">{t('contact.subtitle')}</p>
         </div>
 
