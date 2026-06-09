@@ -17,8 +17,7 @@ export function Header() {
     <header className="relative z-20">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2">
-          <img src="/logo.png" alt="Nodeflare" className="h-7 sm:h-8 w-auto" />
-          <span className="text-base sm:text-lg font-black text-[#323232]">NodeFlare</span>
+          <img src="/logo2.png" alt="Nodeflare" className="h-7 sm:h-8 w-auto" />
         </Link>
 
         <nav className="hidden md:flex items-center gap-8">

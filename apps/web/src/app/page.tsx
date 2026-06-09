@@ -30,10 +30,10 @@ export default async function HomePage() {
 
   const features = [
     { titleKey: 'features.zeroConfig.title', descKey: 'features.zeroConfig.desc', icon: <><path d="M12 2a10 10 0 1 0 10 10H12V2z" /><path d="M21.18 8.02A10 10 0 0 0 12 2v10h10a10 10 0 0 0-0.82-3.98z" /></>, align: 'left', image: '/stdio.png' },
-    { titleKey: 'features.acl.title', descKey: 'features.acl.desc', icon: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" /></>, align: 'right', image: null },
-    { titleKey: 'features.secrets.title', descKey: 'features.secrets.desc', icon: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>, align: 'left', image: null },
-    { titleKey: 'features.protocol.title', descKey: 'features.protocol.desc', icon: <><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></>, align: 'right', image: null },
-    { titleKey: 'features.alwaysOn.title', descKey: 'features.alwaysOn.desc', icon: <><circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>, align: 'left', image: null },
+    { titleKey: 'features.acl.title', descKey: 'features.acl.desc', icon: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" /></>, align: 'right', image: '/fine_grained_permissions.png' },
+    { titleKey: 'features.secrets.title', descKey: 'features.secrets.desc', icon: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>, align: 'left', image: '/secret_management.png' },
+    { titleKey: 'features.protocol.title', descKey: 'features.protocol.desc', icon: <><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></>, align: 'right', image: '/audit_access_logs.png' },
+    { titleKey: 'features.alwaysOn.title', descKey: 'features.alwaysOn.desc', icon: <><circle cx="12" cy="12" r="10" /><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>, align: 'left', image: '/mcp_leakage_prevention.png' },
   ];
 
   const freeFeatures = ['pricing.free.feature1', 'pricing.free.feature2', 'pricing.free.feature3', 'pricing.free.feature4'];
@@ -369,11 +369,11 @@ export default async function HomePage() {
           </div>
         </section>
 
-        {/* Blog - マガジンレイアウト */}
-        <BlogSection />
-
         {/* FAQ - インタラクティブアコーディオン */}
         <FAQAccordion />
+
+        {/* Blog - マガジンレイアウト */}
+        <BlogSection />
       </main>
 
       <Footer />
