@@ -7,7 +7,10 @@ export function Footer() {
   const t = useTranslations('footer');
 
   return (
-    <footer className="bg-gray-950 border-t border-gray-800 py-16">
+    <footer
+      className="border-t border-violet-900/40 py-16"
+      style={{ background: 'linear-gradient(180deg, #2a1d47 0%, #160e26 100%)' }}
+    >
       <div className="max-w-6xl mx-auto px-4 sm:px-6">
         <div className="grid md:grid-cols-4 gap-12 mb-12">
           <div>

@@ -51,11 +51,24 @@
     "billing": "プランと請求"
   },
   "home": {
+    "discord": {
+      "title": "最新MCPと活用事例が集まる場所",
+      "description": "Discordでは、新しく公開されたMCPサーバーが随時シェアされ、MCPを活用した自動化の事例やノウハウもどんどん投稿されています。最新情報をいち早くキャッチして、コミュニティと一緒に活用を広げましょう。",
+      "cta": "Discordに参加",
+      "chat": {
+        "msg1": "Notion連携の新しいMCP見つけた！めっちゃ便利そう👇",
+        "msg2": "これ使ってSlackの議事録を自動要約する仕組み作ってみた🔥",
+        "msg3": "今週公開された新着MCPまとめ、ピン留めしておきました📌",
+        "input": "#mcp-updates へメッセージを送信"
+      }
+    },
     "title": "MCP専用ホスティング - Nodeflare",
-    "heroTitle1": "MCP専用",
-    "heroTitle2": "ホスティング",
-    "heroDescription1": "GitHubのstdio形式MCPをSSE形式に自動変換。",
-    "heroDescription2": "認証周りの実装を全て丸投げ。",
+    "heroTitle1": "MCPを使うなら",
+    "heroTitle2": "NodeFlare",
+    "heroTitle3": "で",
+    "heroDescription1": "GitHubのMCPリポジトリを渡すだけで、stdio形式をSSE対応エンドポイントへ自動変換。",
+    "heroDescription2": "OAuth 2.0認証も標準付帯で、インフラ管理なしに数分で本番運用を始められます。",
+    "heroBadge": "MCPサーバーを数分でデプロイ",
     "startWithGithub": "GitHubで始める",
     "getStarted": "無料で始める",
     "dashboard": {
@@ -84,7 +97,7 @@
     },
     "features": {
       "badge": "なぜNodeflare？",
-      "title": "Nodeflareでできること",
+      "title": "MCPを本番で動かすために必要な機能を、ひとつに揃えました。",
       "zeroConfig": {
         "title": "stdio→SSE自動変換",
         "desc": "GitHubで公開されているstdio形式のMCPを、URLを指定するだけでSSE形式に自動変換。フォーク不要で即デプロイ。"
@@ -110,11 +123,18 @@
       "badge": "Access Control",
       "title": "認証・認可の実装は\n不要です",
       "description": "MCPサーバーに認証処理を書く必要はありません。Nodeflareがトークン認証・ツール単位の権限制御・監査ログを代わりに処理します。",
+      "descriptionExtra": "Bearer TokenやOAuth 2.0は自動で付与され、tools/callはメソッド単位で許可・拒否を設定できます。リクエストごとに監査ログが自動で記録されるため、誰がいつどのツールを呼び出したかも追跡可能。これらはすべて、MCP側のコードを一切変更することなく利用できます。",
       "tokenAuth": "Bearer Token / OAuth 2.0 を自動付与",
       "toolPermission": "tools/call をメソッド単位で許可・拒否",
       "accessLog": "リクエスト単位で監査ログを自動記録",
       "noCode": "MCP側のコード変更は一切不要",
       "codeComment": "Notionのページを検索"
+    },
+    "bareMetal": {
+      "badge": "Bare Metal",
+      "title": "どこよりも安く、速いサーバーへ",
+      "description": "2026年8月より、専用のベアメタルサーバーへ移行します。共有環境を脱してリソースを占有することで、どこよりも安く・速いホスティングを実現します。",
+      "descriptionExtra": "オーバーヘッドのない物理サーバーだから、レイテンシも価格も一切妥協なし。MCPの本番運用を、これまで以上に快適にします。"
     },
     "pricing": {
       "badge": "料金プラン",
@@ -293,6 +313,8 @@
       "mcpPathAutoStdio": "STDIOトランスポートの場合は /mcp に自動設定されます",
       "entryCommand": "起動コマンド",
       "entryCommandHelp": "サーバーを起動するコマンド（例: python server.py, uv run mcp-server）。空の場合はプロジェクト構成から自動検出されます。",
+      "buildCommand": "ビルドコマンド",
+      "buildCommandHelp": "起動前にサーバーをビルドするコマンド（例: npm run build, npm run compile）。空の場合、Node プロジェクトは package.json に build スクリプトがあれば自動実行します。",
       "authEnabled": "NodeFlare認証を有効にする",
       "authEnabledHelp": "オフにすると、NodeFlareの認証レイヤーをスキップします。MCPサーバー側で独自の認証を行う場合（Notion APIなど）に使用してください。",
       "authDisabledWarning": "認証が無効になっています。MCPサーバー側で認証を処理していることを確認してください。",

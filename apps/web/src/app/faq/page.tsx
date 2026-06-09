@@ -62,12 +62,12 @@ export default function FAQPage() {
   };
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
       <Header />
 
       <main className="max-w-4xl mx-auto px-4 sm:px-6 py-16 sm:py-24">
         <div className="mb-12 text-center">
-          <h1 className="text-xl sm:text-2xl font-extrabold" style={{ color: '#333333' }}>{t('title')}</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: '#323232' }}>{t('title')}</h1>
         </div>
 
         <div className="space-y-12">
