@@ -55,7 +55,7 @@ export default function ContactPage() {
       <Header />
 
       <main className="max-w-xl mx-auto px-4 sm:px-6 py-16 sm:py-24">
-        <h1 className="text-xl sm:text-2xl font-extrabold mb-8" style={{ color: '#333333' }}>{t('title')}</h1>
+        <h1 className="text-xl sm:text-2xl font-extrabold mb-8" style={{ color: '#323232' }}>{t('title')}</h1>
 
         {isSubmitted ? (
           <div className="bg-green-50 border border-green-200 rounded-xl p-8 text-center">

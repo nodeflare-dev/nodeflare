@@ -515,6 +515,10 @@ pub struct CreateServerRequest {
     /// If None, auto-detect based on project structure
     #[validate(length(max = 500))]
     pub entry_command: Option<String>,
+    /// Custom build command run at image-build time (e.g., "npm run build", "npm run compile")
+    /// If None, fall back to the runtime default (Node: `npm run build --if-present`)
+    #[validate(length(max = 500))]
+    pub build_command: Option<String>,
     /// When false, skip NodeFlare authentication layer (for servers that handle their own auth)
     /// Defaults to true if not specified
     pub auth_enabled: Option<bool>,
@@ -536,6 +540,9 @@ pub struct UpdateServerRequest {
     /// Custom entry command for the MCP server (e.g., "python server.py", "uv run mcp-server")
     #[validate(length(max = 500))]
     pub entry_command: Option<String>,
+    /// Custom build command run at image-build time (e.g., "npm run build", "npm run compile")
+    #[validate(length(max = 500))]
+    pub build_command: Option<String>,
     /// When false, skip NodeFlare authentication layer (for servers that handle their own auth)
     pub auth_enabled: Option<bool>,
 }
@@ -606,6 +613,8 @@ pub struct ServerResponse {
     pub mcp_path: String,
     /// Custom entry command for the MCP server
     pub entry_command: Option<String>,
+    /// Custom build command run at image-build time
+    pub build_command: Option<String>,
     /// When false, NodeFlare authentication is disabled (for servers with their own auth)
     pub auth_enabled: bool,
     pub created_at: DateTime<Utc>,

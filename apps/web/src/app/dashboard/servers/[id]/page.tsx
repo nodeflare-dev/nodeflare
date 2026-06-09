@@ -1233,6 +1233,7 @@ function SettingsTab({
   const [rootDirectory, setRootDirectory] = useState(server.root_directory || '');
   const [mcpPath, setMcpPath] = useState(server.mcp_path || '/mcp');
   const [entryCommand, setEntryCommand] = useState(server.entry_command || '');
+  const [buildCommand, setBuildCommand] = useState(server.build_command || '');
   const [authEnabled, setAuthEnabled] = useState(server.auth_enabled ?? true);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -1248,6 +1249,7 @@ function SettingsTab({
         root_directory: rootDirectory || '',
         mcp_path: mcpPath || '/mcp',
         entry_command: entryCommand || undefined,
+        build_command: buildCommand || undefined,
         auth_enabled: authEnabled,
       });
       queryClient.invalidateQueries({ queryKey: ['servers'] });
@@ -1324,6 +1326,18 @@ function SettingsTab({
             value={entryCommand}
             onChange={(e) => setEntryCommand(e.target.value)}
             placeholder="python server.py"
+            className="bg-white font-mono"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="buildCommand">{t('create.buildCommand')}</Label>
+          <p className="text-xs text-gray-500">{t('create.buildCommandHelp')}</p>
+          <Input
+            id="buildCommand"
+            value={buildCommand}
+            onChange={(e) => setBuildCommand(e.target.value)}
+            placeholder="npm run build"
             className="bg-white font-mono"
           />
         </div>
@@ -1904,7 +1918,7 @@ function MetricsTab({ serverId, workspaceId, serverStatus, t }: { serverId: stri
             )}
           </div>
           <div className="flex items-end justify-between mt-1">
-            <span className="text-2xl font-semibold" style={{ color: '#333333' }}>{formatPercent(cpuUsage)}</span>
+            <span className="text-2xl font-semibold" style={{ color: '#323232' }}>{formatPercent(cpuUsage)}</span>
             <div className="w-24 h-10">
               {cpuSparkline.length > 1 ? (
                 <ResponsiveContainer width="100%" height="100%">
@@ -1937,8 +1951,8 @@ function MetricsTab({ serverId, workspaceId, serverStatus, t }: { serverId: stri
           </div>
           <div className="flex items-end justify-between mt-1">
             <div>
-              <span className="text-2xl font-semibold" style={{ color: '#333333' }}>{formatBytes(memoryUsed)}</span>
-              <span className="text-sm ml-1" style={{ color: '#333333' }}>/ {formatBytes(memoryTotal)}</span>
+              <span className="text-2xl font-semibold" style={{ color: '#323232' }}>{formatBytes(memoryUsed)}</span>
+              <span className="text-sm ml-1" style={{ color: '#323232' }}>/ {formatBytes(memoryTotal)}</span>
             </div>
             <div className="w-24 h-10">
               {memorySparkline.length > 1 ? (
@@ -1969,11 +1983,11 @@ function MetricsTab({ serverId, workspaceId, serverStatus, t }: { serverId: stri
             <div className="space-y-0.5">
               <div className="flex items-center gap-2">
                 <span className="text-violet-500 text-xs">↓</span>
-                <span className="text-lg font-semibold" style={{ color: '#333333' }}>{formatBytes(networkRx)}/s</span>
+                <span className="text-lg font-semibold" style={{ color: '#323232' }}>{formatBytes(networkRx)}/s</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-orange-500 text-xs">↑</span>
-                <span className="text-lg font-semibold" style={{ color: '#333333' }}>{formatBytes(networkTx)}/s</span>
+                <span className="text-lg font-semibold" style={{ color: '#323232' }}>{formatBytes(networkTx)}/s</span>
               </div>
             </div>
             <div className="w-24 h-10">

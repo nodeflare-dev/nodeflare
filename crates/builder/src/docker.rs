@@ -389,9 +389,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends procps curl && 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --only=production
+# Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.
+RUN npm ci 2>/dev/null || npm install
 
 COPY . .
+
+# Run the project's own build script if it declares one (no-op when absent).
+RUN npm run build --if-present
 
 EXPOSE 3000
 

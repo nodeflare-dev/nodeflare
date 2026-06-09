@@ -13,7 +13,7 @@ export default function BillingCancelPage() {
       <div className="max-w-sm w-full text-center">
         <XCircle className="w-10 h-10 mx-auto text-muted-foreground/60 mb-6" strokeWidth={1.5} />
 
-        <h1 className="text-xl font-bold mb-2 text-[#333333]">{t('title')}</h1>
+        <h1 className="text-xl font-bold mb-2 text-[#323232]">{t('title')}</h1>
         <p className="text-sm text-muted-foreground leading-relaxed">
           {t('description')}
         </p>

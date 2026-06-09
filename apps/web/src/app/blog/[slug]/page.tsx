@@ -230,7 +230,7 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 text-[#333333] text-sm font-bold bg-white px-4 py-2 rounded-lg group-hover:bg-gray-100 transition-colors">
+              <div className="flex items-center gap-2 text-[#323232] text-sm font-bold bg-white px-4 py-2 rounded-lg group-hover:bg-gray-100 transition-colors">
                 {locale === 'ja' ? '無料で始める' : 'Get Started'}
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />

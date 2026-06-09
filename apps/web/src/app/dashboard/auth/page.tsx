@@ -27,8 +27,8 @@ export default function AuthSettingsPage() {
         >
           {/* Header: Icon + Title */}
           <div className="flex items-center gap-2 mb-3">
-            <KeyRound className="w-5 h-5 text-[#333333]" />
-            <h2 className="text-base font-semibold text-[#333333]">
+            <KeyRound className="w-5 h-5 text-[#323232]" />
+            <h2 className="text-base font-semibold text-[#323232]">
               {t('accessTokens.title')}
             </h2>
             <span className="ml-auto px-2 py-0.5 text-[10px] font-medium text-violet-700">
@@ -55,8 +55,8 @@ export default function AuthSettingsPage() {
         >
           {/* Header: Icon + Title */}
           <div className="flex items-center gap-2 mb-3">
-            <Globe className="w-5 h-5 text-[#333333]" />
-            <h2 className="text-base font-semibold text-[#333333]">
+            <Globe className="w-5 h-5 text-[#323232]" />
+            <h2 className="text-base font-semibold text-[#323232]">
               {t('oauth.title')}
             </h2>
             <span className="ml-auto px-2 py-0.5 text-[10px] font-medium text-violet-700">

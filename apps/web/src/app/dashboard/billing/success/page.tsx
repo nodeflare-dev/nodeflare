@@ -75,7 +75,7 @@ export default function BillingSuccessPage() {
         <div className="max-w-sm w-full text-center">
           <CheckCircle className="w-10 h-10 mx-auto text-green-500 mb-6" strokeWidth={1.5} />
 
-          <h1 className="text-xl font-bold mb-2 text-[#333333]">{t('completeTitle')}</h1>
+          <h1 className="text-xl font-bold mb-2 text-[#323232]">{t('completeTitle')}</h1>
           <p className="text-sm text-muted-foreground leading-relaxed">
             {t('completeDescription')}
           </p>
@@ -102,7 +102,7 @@ export default function BillingSuccessPage() {
         <div className="max-w-sm w-full text-center">
           <div className="w-10 h-10 mx-auto border-4 rounded-full border-gray-200 border-t-violet-600 animate-spin mb-6" />
 
-          <h1 className="text-xl font-bold mb-2 text-[#333333]">{t('timeoutTitle')}</h1>
+          <h1 className="text-xl font-bold mb-2 text-[#323232]">{t('timeoutTitle')}</h1>
           <p className="text-sm text-muted-foreground leading-relaxed">
             {t('timeoutDescription')}
           </p>
@@ -127,7 +127,7 @@ export default function BillingSuccessPage() {
       <div className="max-w-sm w-full text-center">
         <div className="w-10 h-10 mx-auto border-4 rounded-full border-gray-200 border-t-violet-600 animate-spin mb-6" />
 
-        <h1 className="text-xl font-bold mb-2 text-[#333333]">{t('title')}</h1>
+        <h1 className="text-xl font-bold mb-2 text-[#323232]">{t('title')}</h1>
         <p className="text-sm text-muted-foreground leading-relaxed">
           {t('description')}
         </p>

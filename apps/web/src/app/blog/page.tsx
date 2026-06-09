@@ -100,7 +100,7 @@ export default async function BlogPage() {
 
       <main className="max-w-6xl mx-auto px-6 py-16">
         <div className="mb-12">
-          <h1 className="text-xl sm:text-2xl font-extrabold" style={{ color: '#333333' }}>{t('title')}</h1>
+          <h1 className="text-xl sm:text-2xl font-extrabold" style={{ color: '#323232' }}>{t('title')}</h1>
         </div>
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">

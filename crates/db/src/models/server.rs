@@ -27,6 +27,9 @@ pub struct McpServer {
     /// Custom entry command for the MCP server (e.g., "python server.py", "uv run mcp-server")
     /// If None, auto-detect based on project structure
     pub entry_command: Option<String>,
+    /// Custom build command run at image-build time (e.g., "npm run build", "npm run compile")
+    /// If None, fall back to the runtime default (Node: `npm run build --if-present`)
+    pub build_command: Option<String>,
     /// When false, skip NodeFlare authentication layer (for servers that handle their own auth)
     pub auth_enabled: bool,
     pub created_at: DateTime<Utc>,
@@ -100,6 +103,7 @@ pub struct CreateServer {
     pub root_directory: String,
     pub mcp_path: String,
     pub entry_command: Option<String>,
+    pub build_command: Option<String>,
     pub auth_enabled: bool,
 }
 
@@ -116,5 +120,6 @@ pub struct UpdateServer {
     pub root_directory: Option<String>,
     pub mcp_path: Option<String>,
     pub entry_command: Option<String>,
+    pub build_command: Option<String>,
     pub auth_enabled: Option<bool>,
 }
