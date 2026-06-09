@@ -15,8 +15,7 @@ export function Footer() {
         <div className="grid md:grid-cols-4 gap-12 mb-12">
           <div>
             <div className="flex items-center gap-2 mb-4">
-              <img src="/logo.png" alt="Nodeflare" className="h-8 w-auto" />
-              <span className="font-black text-white">NodeFlare</span>
+              <img src="/logo2.png" alt="Nodeflare" className="h-8 w-auto" />
             </div>
             <p className="text-gray-400 text-sm">
               {t('tagline')}
@@ -24,7 +23,7 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-semibold text-white mb-4">{t('product')}</h4>
+            <h4 className="font-semibold text-white text-sm uppercase mb-4">{t('product')}</h4>
             <ul className="space-y-2 text-gray-400 text-sm">
               <li><Link href="/docs" className="hover:text-white transition-colors">{t('docs')}</Link></li>
               <li><Link href="/pricing" className="hover:text-white transition-colors">{t('pricing')}</Link></li>
@@ -33,7 +32,7 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-semibold text-white mb-4">{t('support')}</h4>
+            <h4 className="font-semibold text-white text-sm uppercase mb-4">{t('support')}</h4>
             <ul className="space-y-2 text-gray-400 text-sm">
               <li><Link href="/faq" className="hover:text-white transition-colors">{t('faq')}</Link></li>
               <li><Link href="/contact" className="hover:text-white transition-colors">{t('contact')}</Link></li>
@@ -41,7 +40,7 @@ export function Footer() {
           </div>
 
           <div>
-            <h4 className="font-semibold text-white mb-4">{t('legal')}</h4>
+            <h4 className="font-semibold text-white text-sm uppercase mb-4">{t('legal')}</h4>
             <ul className="space-y-2 text-gray-400 text-sm">
               <li><Link href="/legal/terms" className="hover:text-white transition-colors">{t('terms')}</Link></li>
               <li><Link href="/legal/privacy" className="hover:text-white transition-colors">{t('privacy')}</Link></li>
