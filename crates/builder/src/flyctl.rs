@@ -183,8 +183,11 @@ primary_region = "{region}"
 /// Project structure information detected from source directory
 #[derive(Debug, Default)]
 pub struct ProjectStructure {
-    /// Detected Python entry point (e.g., "server.py", "main.py")
+    /// Detected Python entry point file (e.g., "server.py", "main.py")
     pub python_entry: Option<String>,
+    /// Console-script name from pyproject.toml `[project.scripts]` (installed on PATH).
+    /// Preferred over `python_entry` when present, mirroring how pip/uv run the package.
+    pub python_script: Option<String>,
     /// Whether pyproject.toml exists
     pub has_pyproject: bool,
     /// Whether uv.lock exists (indicates uv is used)
@@ -193,6 +196,34 @@ pub struct ProjectStructure {
     pub has_requirements_txt: bool,
     /// Whether package.json exists
     pub has_package_json: bool,
+    /// Auto-detected Node start command derived from package.json
+    /// (`npm start` / `node <main>` / `node <bin>`). None when undetectable.
+    pub node_entry: Option<String>,
+    /// Binary name produced by `cargo build` (from `[[bin]]` or `[package].name`).
+    /// Used to run the correct executable instead of assuming `./server`.
+    pub rust_bin: Option<String>,
+}
+
+impl ProjectStructure {
+    /// Best-guess startup command (full command string) for a runtime, based purely
+    /// on detected project files. Returns None when nothing could be inferred — callers
+    /// fall back to the user-supplied `entry_command` or the runtime's hardcoded default.
+    ///
+    /// This is the source of "auto-detection": it lets stdio servers deploy without an
+    /// explicit entry command, and lets SSE servers stop assuming `index.js`.
+    fn detected_entry(&self, runtime: &str) -> Option<String> {
+        match runtime {
+            "node" => self.node_entry.clone(),
+            "python" => self
+                .python_script
+                .clone()
+                .or_else(|| self.python_entry.clone().map(|f| format!("python {}", f))),
+            // Go always builds to /app/server in our generated Dockerfile.
+            "go" => Some("./server".to_string()),
+            "rust" => self.rust_bin.clone().map(|b| format!("./{}", b)),
+            _ => None,
+        }
+    }
 }
 
 /// Detect project structure from source directory
@@ -236,7 +267,109 @@ pub async fn detect_project_structure(source_dir: &Path) -> ProjectStructure {
         }
     }
 
+    // Parse manifests for richer start-command detection (language-aware).
+    // Reads are best-effort: a malformed/absent manifest simply yields None.
+    if structure.has_package_json {
+        if let Ok(content) = std::fs::read_to_string(source_dir.join("package.json")) {
+            structure.node_entry = parse_node_entry(&content);
+        }
+    }
+    if structure.has_pyproject {
+        if let Ok(content) = std::fs::read_to_string(source_dir.join("pyproject.toml")) {
+            structure.python_script = parse_pyproject_script(&content);
+        }
+    }
+    if source_dir.join("Cargo.toml").exists() {
+        if let Ok(content) = std::fs::read_to_string(source_dir.join("Cargo.toml")) {
+            structure.rust_bin = parse_cargo_bin(&content);
+        }
+    }
+
     structure
+}
+
+/// Derive a Node start command from `package.json` contents.
+/// Priority: `scripts.start` (→ `npm start`) > `main` (→ `node <main>`) > `bin` (→ `node <path>`).
+/// `scripts.start`/`main` are the conventional "run this app" entry; `bin` is the
+/// fallback that covers stdio CLI packages which only declare an executable.
+fn parse_node_entry(package_json: &str) -> Option<String> {
+    let pkg: serde_json::Value = serde_json::from_str(package_json).ok()?;
+
+    // 1. An explicit `start` script — let npm run exactly what the project defined.
+    if pkg
+        .get("scripts")
+        .and_then(|s| s.get("start"))
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return Some("npm start".to_string());
+    }
+
+    // 2. `main` — the package's documented entry module.
+    if let Some(main) = pkg.get("main").and_then(|v| v.as_str()) {
+        if !main.trim().is_empty() {
+            return Some(format!("node {}", main.trim()));
+        }
+    }
+
+    // 3. `bin` — a CLI executable. Prefer the entry matching the package name,
+    //    otherwise the first declared binary.
+    match pkg.get("bin") {
+        Some(serde_json::Value::String(path)) if !path.trim().is_empty() => {
+            return Some(format!("node {}", path.trim()));
+        }
+        Some(serde_json::Value::Object(map)) => {
+            let name = pkg.get("name").and_then(|v| v.as_str());
+            if let Some(n) = name {
+                if let Some(path) = map.get(n).and_then(|v| v.as_str()) {
+                    if !path.trim().is_empty() {
+                        return Some(format!("node {}", path.trim()));
+                    }
+                }
+            }
+            for path in map.values().filter_map(|v| v.as_str()) {
+                if !path.trim().is_empty() {
+                    return Some(format!("node {}", path.trim()));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    None
+}
+
+/// Extract the first console-script name from a pyproject.toml `[project.scripts]` table.
+/// These names are installed on PATH by pip/uv, so running the bare name starts the server.
+fn parse_pyproject_script(pyproject: &str) -> Option<String> {
+    let val: toml::Value = toml::from_str(pyproject).ok()?;
+    let scripts = val.get("project")?.get("scripts")?.as_table()?;
+    scripts.keys().next().cloned()
+}
+
+/// Determine the binary name produced by `cargo build`.
+/// Uses the first `[[bin]]` entry's name, falling back to `[package].name`.
+fn parse_cargo_bin(cargo_toml: &str) -> Option<String> {
+    let val: toml::Value = toml::from_str(cargo_toml).ok()?;
+
+    if let Some(name) = val
+        .get("bin")
+        .and_then(|b| b.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|first| first.get("name"))
+        .and_then(|n| n.as_str())
+    {
+        if !name.trim().is_empty() {
+            return Some(name.trim().to_string());
+        }
+    }
+
+    val.get("package")
+        .and_then(|p| p.get("name"))
+        .and_then(|n| n.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Generate Dockerfile if not present
@@ -285,6 +418,12 @@ fn generate_sse_dockerfile(runtime: &str, build_command: Option<&str>, project: 
         "node" => {
             // Custom build_command if set, else the project's own `build` script (no-op if absent).
             let build_step = node_build_step(build_command);
+            // Auto-detected start command from package.json; fall back to the historical default.
+            let node_cmd = project
+                .node_entry
+                .as_deref()
+                .map(format_entry_command_as_args)
+                .unwrap_or_else(|| r#""node", "index.js""#.to_string());
             format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -296,21 +435,21 @@ COPY . .
 # Output path is the project's concern; we don't hardcode it.
 {build_step}
 EXPOSE 3000
-CMD ["node", "index.js"]
+CMD [{node_cmd}]
 "#)
         },
         "python" => {
-            let entry = project.python_entry.as_deref().unwrap_or("main.py");
             let install_deps = generate_python_install_deps(project);
             // Optional custom build (e.g. a codegen/compile step) only when set.
             let build_step = optional_build_step(build_command);
+            let python_cmd = python_default_cmd(project);
             format!(r#"FROM python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 {install_deps}
 {build_step}EXPOSE 8000
-CMD ["python", "{entry}"]
+CMD [{python_cmd}]
 "#)
         },
         "go" => r#"FROM golang:1.22 AS builder
@@ -326,11 +465,15 @@ COPY --from=builder /app/server .
 EXPOSE 8080
 CMD ["./server"]
 "#.to_string(),
-        "rust" => r#"FROM rust:1.75-slim AS builder
+        "rust" => {
+            // Copy & run the actual compiled binary (its name is the crate/bin name),
+            // instead of assuming a binary literally called `server`.
+            let (copy_bin, run_cmd) = rust_binary_copy_and_cmd(project);
+            format!(r#"FROM rust:1.75-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN mkdir src && echo "fn main() {{}}" > src/main.rs
 RUN cargo build --release
 RUN rm -rf src
 COPY . .
@@ -339,10 +482,11 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder /app/target/release/* .
+{copy_bin}
 EXPOSE 8080
-CMD ["./server"]
-"#.to_string(),
+CMD [{run_cmd}]
+"#)
+        },
         _ => r#"FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -369,6 +513,34 @@ fn generate_python_install_deps(project: &ProjectStructure) -> String {
     }
 }
 
+/// Default Python CMD arguments (already JSON-quoted, comma-joined) for a project.
+/// Prefers a console script from `[project.scripts]`, else `python <entry-file>`,
+/// else `python main.py`.
+fn python_default_cmd(project: &ProjectStructure) -> String {
+    if let Some(script) = project.python_script.as_deref() {
+        format!("\"{}\"", script)
+    } else {
+        let entry = project.python_entry.as_deref().unwrap_or("main.py");
+        format!("\"python\", \"{}\"", entry)
+    }
+}
+
+/// Resolve the Rust binary `COPY` line and CMD arguments for the runtime stage.
+/// When the binary name is known we copy exactly that file; otherwise we fall back
+/// to copying every release artifact and running `./server` (legacy behaviour).
+fn rust_binary_copy_and_cmd(project: &ProjectStructure) -> (String, String) {
+    match project.rust_bin.as_deref() {
+        Some(bin) => (
+            format!("COPY --from=builder /app/target/release/{bin} ./{bin}"),
+            format!("\"./{bin}\""),
+        ),
+        None => (
+            "COPY --from=builder /app/target/release/* .".to_string(),
+            "\"./server\"".to_string(),
+        ),
+    }
+}
+
 /// Generate Dockerfile for STDIO transport with adapter
 /// The adapter wraps the STDIO MCP server and exposes it as HTTP/SSE
 fn generate_stdio_dockerfile(
@@ -380,19 +552,24 @@ fn generate_stdio_dockerfile(
     build_command: Option<&str>,
     project: &ProjectStructure,
 ) -> String {
-    // Priority for entry command:
-    // 1. User-specified entry_command (from BuildJob)
-    // 2. Entry command from existing Dockerfile
-    // 3. Auto-detected based on project structure
-    let effective_entry_command = entry_command
+    // An entry command the user (or their committed Dockerfile) stated *explicitly*.
+    // Only an explicit command triggers wrapping the project's own Dockerfile — we
+    // never wrap someone's Dockerfile around a merely-guessed command.
+    let explicit_entry = entry_command
         .or(existing_entry_command)
         .map(|s| s.to_string());
 
-    // If there's an existing Dockerfile with entry command, use multi-stage build
-    // that preserves the original build process
-    if let (Some(dockerfile), Some(ref entry_cmd)) = (existing_dockerfile, &effective_entry_command) {
+    // If there's an existing Dockerfile with an explicit entry command, use a
+    // multi-stage build that preserves the original build process.
+    if let (Some(dockerfile), Some(ref entry_cmd)) = (existing_dockerfile, &explicit_entry) {
         return generate_stdio_dockerfile_with_existing(runtime, mcp_path, entry_cmd, dockerfile);
     }
+
+    // Priority for entry command in the generated Dockerfiles below:
+    // 1. User-specified entry_command (from BuildJob)
+    // 2. Entry command from existing Dockerfile
+    // 3. Auto-detected from project manifests (package.json / pyproject / Cargo.toml)
+    let effective_entry_command = explicit_entry.or_else(|| project.detected_entry(runtime));
 
     // Otherwise use default Dockerfiles with auto-detected entry points
     match runtime {
@@ -507,7 +684,10 @@ ENV MCP_HTTP_HOST=0.0.0.0
 EXPOSE 8080
 CMD ["node", "stdio-adapter.cjs", "./server"]
 "#),
-        "rust" => format!(r#"FROM rust:1.75-slim AS builder
+        "rust" => {
+            // Copy & run the actual compiled binary instead of assuming `./server`.
+            let (copy_bin, run_cmd) = rust_binary_copy_and_cmd(project);
+            format!(r#"FROM rust:1.75-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
@@ -521,14 +701,15 @@ RUN cargo build --release
 FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder /app/target/release/* .
+{copy_bin}
 COPY stdio-adapter.cjs .
 ENV PORT=8080
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
 EXPOSE 8080
-CMD ["node", "stdio-adapter.cjs", "./server"]
-"#),
+CMD ["node", "stdio-adapter.cjs", {run_cmd}]
+"#)
+        },
         _ => format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -811,24 +992,25 @@ pub async fn build_and_deploy(
         None
     };
 
+    // Auto-detected startup command from project manifests (used when neither the user
+    // nor an existing Dockerfile supplied one).
+    let detected_entry = project.detected_entry(&job.runtime);
+
     // Log entry command source
     if let Some(ref cmd) = job.entry_command {
         on_log(&format!("Using user-specified entry command: {}", cmd));
     } else if existing_entry_command.is_some() {
         on_log("Using entry command from existing Dockerfile");
-    } else if job.runtime == "python" {
-        if let Some(ref entry) = project.python_entry {
-            on_log(&format!("Auto-detected Python entry point: {}", entry));
-        } else {
-            on_log("Warning: No Python entry point detected, defaulting to main.py");
-        }
+    } else if let Some(ref detected) = detected_entry {
+        on_log(&format!("Auto-detected startup command: {}", detected));
     }
 
-    // For STDIO transport, entry_command is required for all runtimes
-    // Auto-detection is unreliable and leads to confusing failures
+    // For STDIO transport an entry command is required, but auto-detection from project
+    // manifests now satisfies it. We only bail when nothing could be inferred.
     if job.transport == "stdio"
         && job.entry_command.is_none()
         && existing_entry_command.is_none()
+        && detected_entry.is_none()
     {
         let example = match job.runtime.as_str() {
             "node" => "node index.js, npx @modelcontextprotocol/server-xxx",
@@ -838,7 +1020,7 @@ pub async fn build_and_deploy(
             _ => "./your-command",
         };
         anyhow::bail!(
-            "Entry command is required for stdio transport. \
+            "Entry command is required for stdio transport and could not be auto-detected. \
             Please set the startup command in the server settings (e.g., {}).",
             example
         );
@@ -992,4 +1174,120 @@ async fn get_machine_id(config: &AppConfig, app_name: &str) -> Result<String> {
         .next()
         .map(|m| format!("{}:{}", app_name, m.id))
         .ok_or_else(|| anyhow::anyhow!("No machines found"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- Node: package.json start-command detection ----
+
+    #[test]
+    fn node_prefers_start_script() {
+        let pkg = r#"{"scripts": {"start": "node dist/server.js"}, "main": "index.js"}"#;
+        assert_eq!(parse_node_entry(pkg).as_deref(), Some("npm start"));
+    }
+
+    #[test]
+    fn node_falls_back_to_main() {
+        let pkg = r#"{"main": "dist/index.js"}"#;
+        assert_eq!(parse_node_entry(pkg).as_deref(), Some("node dist/index.js"));
+    }
+
+    #[test]
+    fn node_bin_string() {
+        let pkg = r#"{"bin": "./cli.js"}"#;
+        assert_eq!(parse_node_entry(pkg).as_deref(), Some("node ./cli.js"));
+    }
+
+    #[test]
+    fn node_bin_object_prefers_package_name() {
+        let pkg = r#"{"name": "my-mcp", "bin": {"other": "o.js", "my-mcp": "server.js"}}"#;
+        assert_eq!(parse_node_entry(pkg).as_deref(), Some("node server.js"));
+    }
+
+    #[test]
+    fn node_empty_start_skipped() {
+        let pkg = r#"{"scripts": {"start": "  "}, "main": "index.js"}"#;
+        assert_eq!(parse_node_entry(pkg).as_deref(), Some("node index.js"));
+    }
+
+    #[test]
+    fn node_no_signal_returns_none() {
+        assert_eq!(parse_node_entry(r#"{"name": "x"}"#), None);
+        assert_eq!(parse_node_entry("not json"), None);
+    }
+
+    // ---- Python: pyproject [project.scripts] ----
+
+    #[test]
+    fn pyproject_first_script() {
+        let toml = "[project]\nname = \"x\"\n[project.scripts]\nmcp-server = \"x.cli:main\"\n";
+        assert_eq!(parse_pyproject_script(toml).as_deref(), Some("mcp-server"));
+    }
+
+    #[test]
+    fn pyproject_no_scripts() {
+        let toml = "[project]\nname = \"x\"\n";
+        assert_eq!(parse_pyproject_script(toml), None);
+    }
+
+    // ---- Rust: Cargo.toml binary name ----
+
+    #[test]
+    fn cargo_package_name() {
+        let toml = "[package]\nname = \"my-server\"\nversion = \"0.1.0\"\n";
+        assert_eq!(parse_cargo_bin(toml).as_deref(), Some("my-server"));
+    }
+
+    #[test]
+    fn cargo_explicit_bin_wins() {
+        let toml = "[package]\nname = \"crate-name\"\n[[bin]]\nname = \"actual-bin\"\npath = \"src/main.rs\"\n";
+        assert_eq!(parse_cargo_bin(toml).as_deref(), Some("actual-bin"));
+    }
+
+    // ---- detected_entry() per runtime ----
+
+    #[test]
+    fn detected_entry_python_script_over_file() {
+        let p = ProjectStructure {
+            python_script: Some("mcp-server".into()),
+            python_entry: Some("main.py".into()),
+            ..Default::default()
+        };
+        assert_eq!(p.detected_entry("python").as_deref(), Some("mcp-server"));
+    }
+
+    #[test]
+    fn detected_entry_python_file_fallback() {
+        let p = ProjectStructure {
+            python_entry: Some("server.py".into()),
+            ..Default::default()
+        };
+        assert_eq!(p.detected_entry("python").as_deref(), Some("python server.py"));
+    }
+
+    #[test]
+    fn detected_entry_rust_and_go() {
+        let p = ProjectStructure {
+            rust_bin: Some("mybin".into()),
+            ..Default::default()
+        };
+        assert_eq!(p.detected_entry("rust").as_deref(), Some("./mybin"));
+        assert_eq!(p.detected_entry("go").as_deref(), Some("./server"));
+        assert_eq!(ProjectStructure::default().detected_entry("rust"), None);
+        assert_eq!(ProjectStructure::default().detected_entry("unknown"), None);
+    }
+
+    #[test]
+    fn rust_binary_copy_uses_detected_name() {
+        let p = ProjectStructure { rust_bin: Some("srv".into()), ..Default::default() };
+        let (copy, cmd) = rust_binary_copy_and_cmd(&p);
+        assert_eq!(copy, "COPY --from=builder /app/target/release/srv ./srv");
+        assert_eq!(cmd, "\"./srv\"");
+
+        let (copy, cmd) = rust_binary_copy_and_cmd(&ProjectStructure::default());
+        assert_eq!(copy, "COPY --from=builder /app/target/release/* .");
+        assert_eq!(cmd, "\"./server\"");
+    }
 }
