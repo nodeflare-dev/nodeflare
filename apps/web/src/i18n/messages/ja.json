@@ -859,22 +859,53 @@
       "free": {
         "name": "Free",
         "description": "個人プロジェクト向け",
-        "features": ["サーバー3つまで", "デプロイ50回/月", "リクエスト10,000回/月", "ログ保持7日間", "コミュニティサポート"]
+        "features": [
+          "サーバー3つまで",
+          "デプロイ50回/月",
+          "リクエスト10,000回/月",
+          "ログ保持7日間",
+          "コミュニティサポート"
+        ]
       },
       "pro": {
         "name": "Pro",
         "description": "プロフェッショナル開発者向け",
-        "features": ["サーバー20個まで", "デプロイ500回/月", "リクエスト500,000回/月", "ログ保持30日間", "カスタムドメイン", "メールサポート"]
+        "features": [
+          "サーバー20個まで",
+          "デプロイ500回/月",
+          "リクエスト500,000回/月",
+          "ログ保持30日間",
+          "カスタムドメイン",
+          "メールサポート"
+        ]
       },
       "team": {
         "name": "Team",
         "description": "チーム・組織向け",
-        "features": ["サーバー100個まで", "デプロイ2,000回/月", "リクエスト5,000,000回/月", "ログ保持90日間", "カスタムドメイン", "チームメンバー10人まで", "優先サポート"]
+        "features": [
+          "サーバー100個まで",
+          "デプロイ2,000回/月",
+          "リクエスト5,000,000回/月",
+          "ログ保持90日間",
+          "カスタムドメイン",
+          "チームメンバー10人まで",
+          "優先サポート"
+        ]
       },
       "enterprise": {
         "name": "Enterprise",
         "description": "大規模組織向け",
-        "features": ["サーバー無制限", "デプロイ無制限", "リクエスト無制限", "ログ保持1年間", "カスタムドメイン", "チームメンバー無制限", "SSO/SAML", "専任サポート", "SLA保証"]
+        "features": [
+          "サーバー無制限",
+          "デプロイ無制限",
+          "リクエスト無制限",
+          "ログ保持1年間",
+          "カスタムドメイン",
+          "チームメンバー無制限",
+          "SSO/SAML",
+          "専任サポート",
+          "SLA保証"
+        ]
       }
     }
   },
@@ -1182,7 +1213,8 @@
     "terms": "利用規約",
     "privacy": "プライバシーポリシー",
     "commerce": "特定商取引法に基づく表記",
-    "copyright": "© {year} Nodeflare. All rights reserved."
+    "copyright": "© {year} Nodeflare. All rights reserved.",
+    "company": "会社概要"
   },
   "contact": {
     "title": "お問い合わせ",
@@ -1424,5 +1456,35 @@
     "UNAUTHORIZED": "ログインが必要です。再度ログインしてください。",
     "USER_NOT_REGISTERED": "このメールアドレスは登録されていません。招待するにはユーザーがGitHubで先にサインアップする必要があります。",
     "default": "エラーが発生しました。もう一度お試しください。"
+  },
+  "companyPage": {
+    "title": "会社概要",
+    "intro": "当社の会社概要および電子公告を掲載しています。",
+    "name": "商号",
+    "nameValue": "株式会社Nodeflare",
+    "nameEn": "英文表記",
+    "nameEnValue": "Nodeflare, Inc.",
+    "address": "本店所在地",
+    "addressValue": "群馬県高崎市上豊岡町180-7 シティパレス上豊岡210",
+    "representative": "代表者",
+    "representativeValue": "代表取締役 関口峻矢",
+    "capital": "資本金",
+    "capitalValue": "10,000円",
+    "established": "設立年月日",
+    "business": "事業内容",
+    "businessValue": "MCPサーバーのホスティングおよび関連サービスの提供",
+    "employees": "役員・従業員数",
+    "employeesValue": "2名",
+    "corporateNumber": "法人番号",
+    "contact": "連絡先",
+    "contactPhone": "TEL: 070-1390-0619",
+    "contactValue": "よりご連絡ください",
+    "contactLink": "お問い合わせフォーム",
+    "publicNotice": "公告方法",
+    "publicNoticeValue": "電子公告により行う。当社ウェブサイト（https://nodeflare.tech/company）に掲載する。ただし、事故その他やむを得ない事由によって電子公告による公告をすることができない場合は、官報に掲載する方法による。",
+    "tbd": "（準備中）",
+    "noticeHeading": "電子公告",
+    "noticeDesc": "会社法その他の法令に基づく公告を、当ページに掲載します。",
+    "noticeEmpty": "現在、掲載中の公告はありません。"
   }
 }

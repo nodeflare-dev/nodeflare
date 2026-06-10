@@ -45,6 +45,7 @@ export function Footer() {
               <li><Link href="/legal/terms" className="hover:text-white transition-colors">{t('terms')}</Link></li>
               <li><Link href="/legal/privacy" className="hover:text-white transition-colors">{t('privacy')}</Link></li>
               <li><Link href="/legal/commerce" className="hover:text-white transition-colors">{t('commerce')}</Link></li>
+              <li><Link href="/company" className="hover:text-white transition-colors">{t('company')}</Link></li>
             </ul>
           </div>
         </div>
