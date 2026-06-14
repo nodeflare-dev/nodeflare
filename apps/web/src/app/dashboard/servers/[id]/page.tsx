@@ -13,7 +13,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { useServerStatusWebSocket } from '@/hooks/use-websocket';
-import { AlertCircle, Server, Github, Trash2, AlertTriangle, ExternalLink, Copy, ChevronRight, Check, Send, Plus, Key, Lock, Play, Rocket, Globe, Webhook, Settings, Eye, EyeOff, RefreshCw, Clipboard, X, Wrench, CheckCircle, Link2, BarChart3, HelpCircle } from 'lucide-react';
+import { AlertCircle, Server, Boxes, Github, Trash2, AlertTriangle, ExternalLink, Copy, ChevronRight, Check, Send, Plus, Key, Lock, Play, Rocket, Globe, Webhook, Settings, Eye, EyeOff, RefreshCw, Clipboard, X, Wrench, CheckCircle, Link2, BarChart3, HelpCircle } from 'lucide-react';
 import {
   AreaChart,
   Area,
@@ -38,6 +38,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
+import { useSetPageHeader } from '../../page-header';
 
 interface Workspace {
   id: string;
@@ -126,6 +127,8 @@ export default function ServerDetailPage() {
 
   const server = servers?.find((s) => s.id === serverId);
   const workspaceId = server?.workspace_id;
+
+  useSetPageHeader(server?.name ?? t('title'), <Boxes className="w-4 h-4" />);
 
   // Fetch deployments separately to enable conditional polling during builds
   const deploymentsQuery = useQuery({
@@ -330,8 +333,8 @@ export default function ServerDetailPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4">
-          <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-gradient-to-br from-violet-400 to-purple-500 flex items-center justify-center flex-shrink-0">
-            <Server className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+          <div className="flex items-center justify-center flex-shrink-0">
+            <Boxes className="w-9 h-9 sm:w-11 sm:h-11 text-[#323232]" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">

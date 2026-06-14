@@ -106,11 +106,7 @@ export default function VPNPage() {
   return (
     <div className="space-y-8">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-medium flex items-center gap-2 text-gray-400">
-          <Shield className="w-6 h-6" />
-          {t('title')}
-        </h1>
+      <div className="flex items-center justify-end">
         {!isLoadingData && hasPeers && !showForm && !generatedConfig && (
           <Button size="sm" onClick={() => setShowForm(true)}>
             + {t('createConnection')}

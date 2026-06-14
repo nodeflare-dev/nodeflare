@@ -61,12 +61,8 @@ export default function ServersPage() {
     <div className="space-y-4 sm:space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-          <h1 className="text-xl sm:text-2xl font-medium flex items-center gap-2 text-gray-400">
-            <Server className="w-5 h-5 sm:w-6 sm:h-6" />
-            {t('title')}
-          </h1>
           {/* Usage Badge */}
-          <div className="flex items-center gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg bg-gray-100 border border-gray-200 text-xs sm:text-sm self-start">
+          <div className="flex items-center gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg bg-gray-100 text-xs sm:text-sm self-start">
             <Server className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-500" />
             <span className="text-gray-700">
               {t('usage', { current: currentServerCount, max: maxServers === 4294967295 ? '∞' : maxServers })}
@@ -102,15 +98,13 @@ export default function ServersPage() {
           <div className="w-8 h-8 border-4 rounded-full border-gray-200 border-t-violet-600 animate-spin" />
         </div>
       ) : isErrorServers ? (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
-            <p className="text-muted-foreground mb-4">{t('loadError')}</p>
-            <Button variant="outline" onClick={() => window.location.reload()}>
-              {t('retry')}
-            </Button>
-          </CardContent>
-        </Card>
+        <div className="flex flex-col items-center justify-center py-20">
+          <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
+          <p className="text-muted-foreground mb-4">{t('loadError')}</p>
+          <Button variant="outline" onClick={() => window.location.reload()}>
+            {t('retry')}
+          </Button>
+        </div>
       ) : servers?.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20">
           <Server className="w-12 h-12 text-gray-300 mb-4" />
@@ -127,12 +121,12 @@ export default function ServersPage() {
   );
 }
 
-const runtimeStyles: Record<string, { icon: React.ReactNode; iconColor: string; cardBg: string; textColor: string }> = {
-  node: { icon: <SiNodedotjs className="w-5 h-5" />, iconColor: 'text-white', cardBg: 'bg-gradient-to-br from-emerald-500 to-teal-600 border-emerald-600', textColor: 'text-white' },
-  python: { icon: <SiPython className="w-5 h-5" />, iconColor: 'text-white', cardBg: 'bg-gradient-to-br from-blue-500 to-indigo-600 border-blue-600', textColor: 'text-white' },
-  go: { icon: <SiGo className="w-6 h-6" />, iconColor: 'text-white', cardBg: 'bg-gradient-to-br from-cyan-500 to-sky-600 border-cyan-600', textColor: 'text-white' },
-  rust: { icon: <SiRust className="w-5 h-5" />, iconColor: 'text-white', cardBg: 'bg-gradient-to-br from-orange-500 to-amber-600 border-orange-600', textColor: 'text-white' },
-  docker: { icon: <SiDocker className="w-5 h-5" />, iconColor: 'text-white', cardBg: 'bg-gradient-to-br from-sky-500 to-blue-600 border-sky-600', textColor: 'text-white' },
+const runtimeStyles: Record<string, { icon: React.ReactNode; iconColor: string }> = {
+  node: { icon: <SiNodedotjs className="w-5 h-5" />, iconColor: 'text-[#323232]' },
+  python: { icon: <SiPython className="w-5 h-5" />, iconColor: 'text-[#323232]' },
+  go: { icon: <SiGo className="w-6 h-6" />, iconColor: 'text-[#323232]' },
+  rust: { icon: <SiRust className="w-5 h-5" />, iconColor: 'text-[#323232]' },
+  docker: { icon: <SiDocker className="w-5 h-5" />, iconColor: 'text-[#323232]' },
 };
 
 const statusColors: Record<string, string> = {
@@ -149,48 +143,50 @@ function ServerCard({ server, t }: { server: McpServerList; t: (key: string) => 
 
   return (
     <Link href={`/dashboard/servers/${server.id}`}>
-      <Card className={`hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer ${runtime.cardBg} shadow-lg rounded-[5px]`}>
+      <Card className="hover:shadow-md hover:scale-[1.02] transition-all cursor-pointer bg-card border border-gray-200 rounded-[8px] text-[#323232]">
         <CardContent className="p-6">
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-white/20 backdrop-blur-sm">
+              <div className="p-2">
                 <span className={runtime.iconColor}>{runtime.icon}</span>
               </div>
               <div>
-                <h3 className="font-semibold text-white">{server.name}</h3>
-                <p className="text-sm text-white/70">{server.slug}</p>
+                <h3 className="font-semibold text-[#323232]">{server.name}</h3>
+                <p className="text-sm text-gray-500">{server.slug}</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-white/20">
+            <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-gray-100">
               <div
                 className={`w-2 h-2 rounded-full ${
                   statusColors[server.status] ?? statusColors.inactive
                 }`}
               />
-              <span className="text-xs text-white font-medium">
+              <span className="text-xs text-[#323232] font-medium">
                 {t(`status.${server.status}`)}
               </span>
             </div>
           </div>
 
           <div className="space-y-2 text-sm">
-            <div className="flex items-center text-white/80">
-              <span className="mr-2">{t('repo')}:</span>
+            <div className="flex items-center text-[#323232]">
+              <span className="mr-2 text-gray-500">{t('repo')}:</span>
               <span className="truncate">{server.github_repo}</span>
             </div>
-            <div className="flex items-center text-white/80">
-              <span className="mr-2">{t('visibility')}:</span>
+            <div className="flex items-center text-[#323232]">
+              <span className="mr-2 text-gray-500">{t('visibility')}:</span>
               <span className="capitalize">{server.visibility}</span>
             </div>
           </div>
 
-          {server.endpoint_url && (
-            <div className="mt-4 pt-4 border-t border-white/20">
-              <code className="text-xs text-white/70 break-all">
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            {server.endpoint_url ? (
+              <code className="text-xs text-gray-600 break-all">
                 {server.endpoint_url}
               </code>
-            </div>
-          )}
+            ) : (
+              <span className="text-xs text-gray-400 italic">{t('noEndpoint')}</span>
+            )}
+          </div>
         </CardContent>
       </Card>
     </Link>

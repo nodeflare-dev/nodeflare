@@ -37,8 +37,7 @@ export default function ForgotPasswordPage() {
       <div className="flex-1 flex flex-col px-4 py-6 sm:px-8 sm:py-8 lg:px-16">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 mb-8 sm:mb-16">
-          <img src="/logo.png" alt="Nodeflare" className="h-7 sm:h-8 w-auto" />
-          <span className="text-base sm:text-lg font-black text-gray-900">NodeFlare</span>
+          <img src="/logo2.png" alt="Nodeflare" className="h-7 sm:h-8 w-auto" />
         </Link>
 
         {/* Form container */}

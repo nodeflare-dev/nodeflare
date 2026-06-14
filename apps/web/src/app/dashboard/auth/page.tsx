@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { Lock, KeyRound, Globe, ArrowRight, Info } from 'lucide-react';
+import { KeyRound, Globe, ArrowRight, Info } from 'lucide-react';
 
 export default function AuthSettingsPage() {
   const t = useTranslations('auth.settings');
@@ -10,20 +10,12 @@ export default function AuthSettingsPage() {
 
   return (
     <div className="max-w-4xl">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-medium flex items-center gap-2 text-gray-400">
-          <Lock className="w-6 h-6" />
-          {t('title')}
-        </h1>
-      </div>
-
       {/* Auth Method Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Access Tokens Card */}
         <button
           onClick={() => router.push('/dashboard/auth/access-tokens')}
-          className="group p-5 bg-white rounded-xl border border-gray-300 text-left transition-all duration-300 hover:scale-[1.02] hover:shadow-lg hover:border-violet-300 flex flex-col h-full min-h-[160px]"
+          className="group p-5 bg-white rounded-[8px] border border-gray-200 text-left transition-all duration-300 hover:scale-[1.02] hover:shadow-lg hover:border-violet-300 flex flex-col h-full min-h-[160px]"
         >
           {/* Header: Icon + Title */}
           <div className="flex items-center gap-2 mb-3">
@@ -51,7 +43,7 @@ export default function AuthSettingsPage() {
         {/* OAuth Apps Card */}
         <button
           onClick={() => router.push('/dashboard/auth/oauth')}
-          className="group p-5 bg-white rounded-xl border border-gray-300 text-left transition-all duration-300 hover:scale-[1.02] hover:shadow-lg hover:border-blue-300 flex flex-col h-full min-h-[160px]"
+          className="group p-5 bg-white rounded-[8px] border border-gray-200 text-left transition-all duration-300 hover:scale-[1.02] hover:shadow-lg hover:border-blue-300 flex flex-col h-full min-h-[160px]"
         >
           {/* Header: Icon + Title */}
           <div className="flex items-center gap-2 mb-3">

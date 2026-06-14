@@ -9,12 +9,14 @@ import { SiGithub } from 'react-icons/si';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { getLinkedAccounts, unlinkAccount, setPrimaryAccount, getLinkUrl, LinkedGitHubAccount } from '@/lib/github-api';
+import { useSetPageHeader } from '../../page-header';
 
 export default function GitHubSettingsPage() {
   const t = useTranslations('github');
   const tCommon = useTranslations('common');
   const queryClient = useQueryClient();
   const searchParams = useSearchParams();
+  useSetPageHeader(t('settingsTitle'), <SiGithub className="w-4 h-4" />);
 
   const success = searchParams.get('success');
   const error = searchParams.get('error');
@@ -61,11 +63,7 @@ export default function GitHubSettingsPage() {
       </Link>
 
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-xl sm:text-2xl font-medium flex items-center gap-2 text-gray-400">
-          <SiGithub className="w-6 h-6" />
-          {t('settingsTitle')}
-        </h1>
+      <div className="flex items-center justify-end mb-6">
         <Button
           onClick={handleAddAccount}
           className="gap-2"

@@ -129,11 +129,6 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-2xl">
-      <h1 className="text-xl sm:text-2xl font-medium flex items-center gap-2 text-gray-400 mb-6 sm:mb-8">
-        <Settings className="w-5 h-5 sm:w-6 sm:h-6" />
-        {t('title')}
-      </h1>
-
       {/* Profile Section */}
       <section className="mb-8 sm:mb-10">
         <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3 sm:mb-4">{t('account.title')}</h2>
