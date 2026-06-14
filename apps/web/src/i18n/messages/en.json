@@ -268,6 +268,7 @@
     "repo": "Repository",
     "runtime": "Runtime",
     "visibility": "Visibility",
+    "noEndpoint": "No endpoint yet",
     "usage": "{current} / {max} servers",
     "upgrade": {
       "title": "Upgrade Required",
@@ -332,6 +333,9 @@
       "visibilityPublic": "Public",
       "visibilityPrivate": "Private",
       "visibilityTeam": "Team",
+      "visibilityPrivateDesc": "Only you can access",
+      "visibilityTeamDesc": "Team members can access",
+      "visibilityPublicDesc": "Anyone can access",
       "region": "Region",
       "regionHelp": "Select the region to deploy your server",
       "submit": "Create Server",

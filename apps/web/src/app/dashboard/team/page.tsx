@@ -69,14 +69,10 @@ export default function TeamPage() {
   const isLoading = isLoadingWorkspaces || isLoadingMembers;
 
   return (
-    <div className="max-w-4xl">
+    <div>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
         <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-          <h1 className="text-xl sm:text-2xl font-medium flex items-center gap-2 text-gray-400">
-            <Users className="w-5 h-5 sm:w-6 sm:h-6" />
-            {t('title')}
-          </h1>
           {workspaces && workspaces.length > 1 && (
             <div className="flex items-center gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg bg-gray-100 border border-gray-200 self-start">
               <Home className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-500" />
@@ -105,7 +101,7 @@ export default function TeamPage() {
             size="sm"
             onClick={() => setShowCreate(true)}
             disabled={!workspaceId || isAtLimit}
-            className="h-7 text-xs px-2.5"
+            className="h-7 text-xs px-2.5 bg-violet-600 hover:bg-violet-700 border border-violet-900 text-white"
           >
             <Plus className="w-3.5 h-3.5 sm:mr-1" />
             <span className="hidden sm:inline">{t('addMember')}</span>
@@ -161,11 +157,9 @@ export default function TeamPage() {
             </button>
           </div>
         ) : members?.length === 1 ? (
-          <div className="py-16 text-center">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
-              <User className="w-8 h-8 text-gray-400" />
-            </div>
-            <p className="text-gray-500">{t('empty')}</p>
+          <div className="flex flex-col items-center justify-center py-20">
+            <Users className="w-12 h-12 text-gray-300 mb-4" />
+            <p className="text-gray-400">{t('empty')}</p>
           </div>
         ) : (
           <div className="space-y-3">

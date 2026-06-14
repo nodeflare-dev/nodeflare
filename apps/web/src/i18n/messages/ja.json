@@ -268,6 +268,7 @@
     "repo": "リポジトリ",
     "runtime": "ランタイム",
     "visibility": "公開設定",
+    "noEndpoint": "エンドポイント未発行",
     "usage": "{current} / {max} サーバー",
     "upgrade": {
       "title": "アップグレードが必要です",
@@ -332,6 +333,9 @@
       "visibilityPublic": "公開",
       "visibilityPrivate": "非公開",
       "visibilityTeam": "チーム",
+      "visibilityPrivateDesc": "あなただけがアクセス可能",
+      "visibilityTeamDesc": "チームメンバーがアクセス可能",
+      "visibilityPublicDesc": "誰でもアクセス可能",
       "region": "リージョン",
       "regionHelp": "サーバーをデプロイするリージョンを選択してください",
       "submit": "サーバーを作成",

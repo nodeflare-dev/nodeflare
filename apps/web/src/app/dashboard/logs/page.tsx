@@ -156,12 +156,6 @@ export default function LogsPage() {
   if (!servers || servers.length === 0) {
     return (
       <div className="max-w-6xl">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-medium flex items-center gap-2 text-gray-400">
-            <FileText className="w-6 h-6" />
-            {t('title')}
-          </h1>
-        </div>
         <div className="flex flex-col items-center justify-center py-20">
           <FileText className="w-12 h-12 text-gray-300 mb-4" />
           <p className="text-gray-400">{t('noServers')}</p>
@@ -175,10 +169,6 @@ export default function LogsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-4">
-          <h1 className="text-2xl font-medium flex items-center gap-2 text-gray-400">
-            <FileText className="w-6 h-6" />
-            {t('title')}
-          </h1>
           {servers.length > 0 && (
             <div className="relative">
               <div className={`absolute left-3 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ${selectedServer?.status === 'running' ? 'bg-emerald-500' : selectedServer?.status === 'stopped' ? 'bg-gray-400' : 'bg-amber-500'}`} />

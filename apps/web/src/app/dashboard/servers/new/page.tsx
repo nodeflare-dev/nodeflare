@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { GitHubAccountSelector } from '@/components/github/GitHubAccountSelector';
 import { SiNodedotjs, SiPython, SiGo, SiRust, SiDocker, SiGithub } from 'react-icons/si';
+import { useSetPageHeader } from '../../page-header';
 
 type SourceType = 'my-repos' | 'public-url';
 
@@ -22,6 +23,8 @@ export default function NewServerPage() {
   const tApiErrors = useTranslations('apiErrors');
   const router = useRouter();
   const queryClient = useQueryClient();
+
+  useSetPageHeader(t('create.title'), <Server className="w-4 h-4" />);
 
   const { data: workspaces } = useQuery<{ id: string; name: string }[]>({
     queryKey: ['workspaces'],
@@ -166,9 +169,9 @@ export default function NewServerPage() {
   ], [t]);
 
   const visibilities = useMemo(() => [
-    { value: 'private', label: t('create.visibilityPrivate'), desc: 'あなただけがアクセス可能', icon: <Lock className="w-5 h-5" /> },
-    { value: 'team', label: t('create.visibilityTeam'), desc: 'チームメンバーがアクセス可能', icon: <Users className="w-5 h-5" /> },
-    { value: 'public', label: t('create.visibilityPublic'), desc: '誰でもアクセス可能', icon: <Globe className="w-5 h-5" /> },
+    { value: 'private', label: t('create.visibilityPrivate'), desc: t('create.visibilityPrivateDesc'), icon: <Lock className="w-5 h-5" /> },
+    { value: 'team', label: t('create.visibilityTeam'), desc: t('create.visibilityTeamDesc'), icon: <Users className="w-5 h-5" /> },
+    { value: 'public', label: t('create.visibilityPublic'), desc: t('create.visibilityPublicDesc'), icon: <Globe className="w-5 h-5" /> },
   ], [t]);
 
   const errorMessage = useMemo(() => {
@@ -196,12 +199,6 @@ export default function NewServerPage() {
 
   return (
     <div className="max-w-2xl">
-      {/* Header */}
-      <h1 className="text-2xl font-medium mb-8 flex items-center gap-2 text-gray-400">
-        <Server className="w-6 h-6" />
-        {t('create.title')}
-      </h1>
-
       <form onSubmit={handleSubmit} className="space-y-8">
         {/* GitHub Repository Selection */}
         <section>
@@ -222,7 +219,7 @@ export default function NewServerPage() {
               className={`relative flex items-center gap-3 p-4 rounded-xl transition-all text-left ${
                 sourceType === 'my-repos'
                   ? 'bg-violet-50 border border-violet-200 shadow-sm'
-                  : 'bg-white border border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                  : 'bg-white border border-gray-200 hover:border-gray-300 hover:bg-gray-50'
               }`}
             >
               <div className="flex items-center justify-center flex-shrink-0">
@@ -252,7 +249,7 @@ export default function NewServerPage() {
               className={`relative flex items-center gap-3 p-4 rounded-xl transition-all text-left ${
                 sourceType === 'public-url'
                   ? 'bg-violet-50 border border-violet-200 shadow-sm'
-                  : 'bg-white border border-gray-100 hover:border-gray-200 hover:bg-gray-50'
+                  : 'bg-white border border-gray-200 hover:border-gray-300 hover:bg-gray-50'
               }`}
             >
               <div className="flex items-center justify-center flex-shrink-0">
@@ -391,7 +388,7 @@ export default function NewServerPage() {
           ) : (
             // Public URL Input
             <div className="space-y-3">
-              <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-gray-200 bg-white focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100 transition-all">
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl border border-input bg-white focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100 transition-all">
                 <SiGithub className="w-5 h-5 text-gray-400 flex-shrink-0" />
                 <input
                   type="text"
@@ -691,7 +688,7 @@ export default function NewServerPage() {
                   onClick={() => setFormData(prev => ({ ...prev, visibility: vis.value as Visibility }))}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all text-left ${
                     isSelected
-                      ? 'bg-violet-50'
+                      ? ''
                       : 'hover:bg-gray-50'
                   }`}
                 >

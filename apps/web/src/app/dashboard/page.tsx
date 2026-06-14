@@ -141,11 +141,7 @@ export default function DashboardPage() {
   return (
     <div>
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-        <h1 className="text-xl sm:text-2xl font-medium flex items-center gap-2 text-gray-400">
-          <LayoutDashboard className="w-5 h-5 sm:w-6 sm:h-6" />
-          {t('title')}
-        </h1>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-3 mb-6">
         <div className="flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full bg-gray-800 text-xs sm:text-sm border border-gray-700 self-start sm:self-auto">
           <span className="capitalize text-white font-medium">{currentWorkspace?.plan || 'free'}</span>
           <span className="text-gray-600">|</span>

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { format } from 'date-fns';
+import { useSetPageHeader } from '../../page-header';
 
 // Constants
 const COPY_FEEDBACK_DURATION_MS = 2000;
@@ -32,6 +33,7 @@ export default function OAuthAppsPage() {
   const tApiErrors = useTranslations('apiErrors');
   const router = useRouter();
   const queryClient = useQueryClient();
+  useSetPageHeader(t('title'), <Aperture className="w-4 h-4" />);
   const [showCreate, setShowCreate] = useState(false);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [newlyCreatedApp, setNewlyCreatedApp] = useState<OAuthApp | null>(null);
@@ -108,10 +110,6 @@ export default function OAuthAppsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div className="flex items-center space-x-4">
-          <h1 className="text-2xl font-medium flex items-center gap-2 text-gray-400">
-            <Aperture className="w-6 h-6" />
-            {t('title')}
-          </h1>
           {workspaces && workspaces.length > 1 && (
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-100 border border-gray-200">
               <Home className="w-4 h-4 text-gray-500" />

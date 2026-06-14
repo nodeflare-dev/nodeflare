@@ -28,6 +28,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { PageHeaderProvider, DashboardHeaderTitle } from './page-header';
 
 interface NavItem {
   id: string;
@@ -57,7 +58,7 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const queryClient = useQueryClient();
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [, startTransition] = useTransition();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -234,7 +235,8 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="min-h-screen flex">
+    <PageHeaderProvider>
+    <div className="h-screen flex overflow-hidden">
       {/* Mobile menu backdrop */}
       {mobileMenuOpen && (
         <div
@@ -244,18 +246,17 @@ export default function DashboardLayout({
       )}
 
       {/* Sidebar - Desktop */}
-      <aside className={`hidden md:flex ${sidebarOpen ? 'w-48' : 'w-12'} bg-card transition-all duration-300 flex-shrink-0 flex-col`}>
-        <div className="h-14 px-3 border-b flex items-center justify-between relative">
-          <div className="absolute right-0 top-4 bottom-4 w-px bg-border" />
+      <aside className={`hidden md:flex ${sidebarOpen ? 'w-56' : 'w-12'} bg-card transition-all duration-300 flex-shrink-0 flex-col`}>
+        <div className="h-14 px-2 border-b border-gray-200 flex items-center justify-between relative">
+          <div className="absolute right-0 top-4 bottom-4 w-px bg-gray-200" />
           {sidebarOpen && (
-            <Link href="/dashboard" className="flex items-center gap-2">
-              <Image src="/logo.png" alt="Nodeflare" width={20} height={20} className="h-5 w-auto" />
-              <span className="font-bold">NodeFlare</span>
+            <Link href="/dashboard" className="flex items-center gap-2 min-w-0">
+              <Image src="/logo2.png" alt="Nodeflare" width={153} height={32} className="h-8 w-auto shrink-0" />
             </Link>
           )}
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-1.5 rounded-md hover:bg-accent transition-colors"
+            className="p-1.5 rounded-md hover:bg-accent transition-colors shrink-0"
           >
             {sidebarOpen ? (
               <ChevronsLeft className="w-4 h-4" />
@@ -264,7 +265,7 @@ export default function DashboardLayout({
             )}
           </button>
         </div>
-        <nav className="py-2 pl-2 space-y-0.5 border-r flex-1">
+        <nav className="py-2 pl-2 space-y-0.5 border-r border-gray-200 flex-1">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -294,10 +295,9 @@ export default function DashboardLayout({
 
       {/* Sidebar - Mobile (drawer) */}
       <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-card transform transition-transform duration-300 ease-in-out md:hidden ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="h-14 px-4 border-b flex items-center justify-between">
+        <div className="h-14 px-4 border-b border-gray-200 flex items-center justify-between">
           <Link href="/dashboard" className="flex items-center gap-2" onClick={() => setMobileMenuOpen(false)}>
-            <Image src="/logo.png" alt="Nodeflare" width={20} height={20} className="h-5 w-auto" />
-            <span className="font-bold">NodeFlare</span>
+            <Image src="/logo2.png" alt="Nodeflare" width={96} height={20} className="h-5 w-auto" />
           </Link>
           <button
             onClick={() => setMobileMenuOpen(false)}
@@ -327,7 +327,7 @@ export default function DashboardLayout({
           ))}
         </nav>
         {/* Mobile user info */}
-        <div className="border-t p-4">
+        <div className="border-t border-gray-200 p-4">
           <div className="flex items-center gap-3 mb-3">
             {user.avatar_url && (
               <Image
@@ -353,16 +353,17 @@ export default function DashboardLayout({
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
-        <header className="h-14 border-b flex items-center justify-between px-4 md:px-6 bg-card">
-          {/* Mobile menu button */}
-          <button
-            onClick={() => setMobileMenuOpen(true)}
-            className="p-2 -ml-2 rounded-md hover:bg-accent transition-colors md:hidden"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
-          {/* Desktop spacer */}
-          <div className="hidden md:block" />
+        <header className="h-14 border-b border-gray-200 flex items-center justify-between px-4 md:px-6 bg-card">
+          {/* Left: mobile menu button + current page title/icon */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button
+              onClick={() => setMobileMenuOpen(true)}
+              className="p-2 -ml-2 rounded-md hover:bg-accent transition-colors md:hidden"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <DashboardHeaderTitle />
+          </div>
           <div className="flex items-center space-x-2 md:space-x-4">
             <span className="text-sm text-muted-foreground hidden sm:block">{user.name}</span>
             {user.avatar_url && (
@@ -381,9 +382,10 @@ export default function DashboardLayout({
         </header>
 
         {/* Page content */}
-        <main className="flex-1 p-4 md:p-6 bg-gray-100 overflow-x-hidden">{children}</main>
+        <main className="flex-1 p-4 md:p-6 bg-card overflow-y-auto overflow-x-hidden">{children}</main>
       </div>
     </div>
+    </PageHeaderProvider>
   );
 }
 
@@ -440,7 +442,7 @@ function SortableNavLink({
           collapsed ? 'justify-center' : ''
         } ${
           isActive
-            ? 'bg-gray-100 text-foreground border-r-[3px] border-primary -mr-[1px]'
+            ? 'bg-gray-100 text-foreground border-r border-violet-500 -mr-[1px]'
             : 'hover:bg-gray-50 text-gray-500 hover:text-foreground'
         } ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         title={collapsed ? String(children) : undefined}

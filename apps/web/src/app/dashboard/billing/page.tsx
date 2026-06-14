@@ -272,14 +272,6 @@ export default function BillingPage() {
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl sm:text-2xl font-medium flex items-center gap-2 text-gray-400">
-          <CreditCard className="w-5 h-5 sm:w-6 sm:h-6" />
-          {t('title')}
-        </h1>
-      </div>
-
       {/* Billing Error */}
       {billingError && (
         <div className="p-4 rounded-xl bg-red-50 border border-red-200">
