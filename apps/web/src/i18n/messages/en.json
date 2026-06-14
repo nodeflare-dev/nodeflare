@@ -28,7 +28,8 @@
     "showing": "Showing {from} to {to} of {total}",
     "notFound": "Not found",
     "retry": "Retry",
-    "copied": "Copied!"
+    "copied": "Copied!",
+    "done": "Done"
   },
   "nav": {
     "home": "Home",

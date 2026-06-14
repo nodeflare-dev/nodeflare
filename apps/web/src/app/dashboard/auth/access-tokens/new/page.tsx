@@ -1,0 +1,441 @@
+'use client';
+
+import { useMemo, useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslations } from 'next-intl';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { ChevronLeft, KeyRound, Plus, Check, X, Search, ChevronDown } from 'lucide-react';
+import { api } from '@/lib/api';
+import { CreateAccessTokenRequest, CreateAccessTokenResponse, Workspace, McpServerMinimal } from '@/types';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { useSetPageHeader } from '../../../page-header';
+
+const COPY_FEEDBACK_DURATION_MS = 2000;
+
+export default function NewAccessTokenPage() {
+  const t = useTranslations('accessTokens');
+  const tCommon = useTranslations('common');
+  const tApiErrors = useTranslations('apiErrors');
+  const router = useRouter();
+  const queryClient = useQueryClient();
+
+  useSetPageHeader(t('create.title'), <KeyRound className="w-4 h-4" />);
+
+  const { data: workspaces } = useQuery<Workspace[]>({
+    queryKey: ['workspaces'],
+    queryFn: () => api.get('/workspaces'),
+  });
+
+  const workspaceId = workspaces?.[0]?.id;
+
+  const [name, setName] = useState('');
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  const [selectedScopes, setSelectedScopes] = useState<string[]>(['*']);
+  const [customScope, setCustomScope] = useState('');
+  const [serverSearchQuery, setServerSearchQuery] = useState('');
+  const [isServerListOpen, setIsServerListOpen] = useState(false);
+
+  // One-time secret
+  const [newKeyValue, setNewKeyValue] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState(false);
+
+  // Fetch servers (minimal data only)
+  const { data: servers } = useQuery<McpServerMinimal[]>({
+    queryKey: ['servers-minimal'],
+    queryFn: () => api.get('/servers/minimal'),
+  });
+
+  // Filter servers for this workspace
+  const workspaceServers = useMemo(
+    () => servers?.filter(s => s.workspace_id === workspaceId) || [],
+    [servers, workspaceId]
+  );
+
+  // Filter servers based on search query
+  const filteredServers = useMemo(() => {
+    const query = serverSearchQuery.toLowerCase();
+    return workspaceServers.filter(
+      (server) => server.name.toLowerCase().includes(query)
+    );
+  }, [workspaceServers, serverSearchQuery]);
+
+  // Get selected server details
+  const selectedServer = useMemo(
+    () => selectedServerId && selectedServerId !== 'all'
+      ? workspaceServers.find(s => s.id === selectedServerId)
+      : null,
+    [selectedServerId, workspaceServers]
+  );
+
+  const handleSelectServer = (serverId: string) => {
+    setSelectedServerId(serverId);
+    setServerSearchQuery('');
+    setIsServerListOpen(false);
+  };
+
+  const SCOPE_OPTIONS = [
+    { id: 'tools', label: 'Tools', scope: 'tools:*', desc: t('scopes.toolsDesc') },
+    { id: 'resources', label: 'Resources', scope: 'resources:*', desc: t('scopes.resourcesDesc') },
+    { id: 'prompts', label: 'Prompts', scope: 'prompts:*', desc: t('scopes.promptsDesc') },
+  ];
+
+  const createMutation = useMutation({
+    mutationFn: (data: CreateAccessTokenRequest) => {
+      if (!workspaceId) throw new Error('No workspace found');
+      return api.post<CreateAccessTokenResponse>(`/workspaces/${workspaceId}/access-tokens`, data);
+    },
+    onSuccess: (response) => {
+      queryClient.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'access-tokens'] });
+      setNewKeyValue(response.key);
+    },
+  });
+
+  const toggleScope = (scope: string) => {
+    if (scope === '*') {
+      setSelectedScopes((prev) => prev.includes('*') ? [] : ['*']);
+    } else {
+      setSelectedScopes((prev) => {
+        const filtered = prev.filter((s) => s !== '*');
+        if (filtered.includes(scope)) {
+          return filtered.filter((s) => s !== scope);
+        } else {
+          return [...filtered, scope];
+        }
+      });
+    }
+  };
+
+  const addCustomScope = () => {
+    if (customScope && !selectedScopes.includes(customScope)) {
+      setSelectedScopes((prev) => {
+        const filtered = prev.filter((s) => s !== '*');
+        return [...filtered, customScope];
+      });
+      setCustomScope('');
+    }
+  };
+
+  const removeScope = (scope: string) => {
+    setSelectedScopes((prev) => {
+      const result = prev.filter((s) => s !== scope);
+      return result.length === 0 ? ['*'] : result;
+    });
+  };
+
+  const createErrorMessage = useMemo(() => {
+    if (!createMutation.isError) return null;
+    const error = createMutation.error as any;
+    const errorCode = error?.code;
+    if (errorCode) {
+      try {
+        const translated = tApiErrors(errorCode);
+        if (translated && translated !== errorCode) {
+          return translated;
+        }
+      } catch {
+        // Translation not found
+      }
+    }
+    return error?.message || tCommon('error');
+  }, [createMutation.isError, createMutation.error, tApiErrors, tCommon]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedServerId) return;
+    createMutation.mutate({
+      name,
+      server_id: selectedServerId === 'all' ? undefined : selectedServerId,
+      scopes: selectedScopes,
+    });
+  };
+
+  const handleCopyKey = () => {
+    if (newKeyValue) {
+      navigator.clipboard.writeText(newKeyValue);
+      setCopiedKey(true);
+      setTimeout(() => setCopiedKey(false), COPY_FEEDBACK_DURATION_MS);
+    }
+  };
+
+  // Success view: one-time key display (replaces the form)
+  if (newKeyValue) {
+    return (
+      <div className="max-w-2xl">
+        <Link
+          href="/dashboard/auth/access-tokens"
+          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-4 transition-colors"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          {tCommon('back')}
+        </Link>
+
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200">
+          <div className="flex items-start gap-4">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0">
+              <Check className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-emerald-800">{t('created')}</p>
+              <p className="text-sm text-emerald-700 mt-1">{t('createdWarning')}</p>
+              <div className="mt-3 flex items-center gap-2">
+                <code className="flex-1 px-3 py-2 bg-white rounded-lg border border-emerald-200 text-sm font-mono text-gray-800 truncate">
+                  {newKeyValue}
+                </code>
+                <Button
+                  size="sm"
+                  variant={copiedKey ? "default" : "outline"}
+                  className={copiedKey ? "bg-emerald-600 hover:bg-emerald-600" : ""}
+                  onClick={handleCopyKey}
+                >
+                  {copiedKey ? "Copied!" : tCommon('copy')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2.5 pt-4 mt-6 border-t border-gray-100">
+          <Button
+            type="button"
+            onClick={() => router.push('/dashboard/auth/access-tokens')}
+            className="h-10 px-4 rounded-lg bg-violet-500 hover:bg-violet-600 border border-violet-600 text-white text-sm font-medium gap-2 transition-colors duration-200"
+          >
+            {tCommon('done')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-2xl">
+      <Link
+        href="/dashboard/auth/access-tokens"
+        className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-4 transition-colors"
+      >
+        <ChevronLeft className="w-4 h-4" />
+        {tCommon('back')}
+      </Link>
+
+      <form onSubmit={handleSubmit} className="space-y-8">
+        {/* Name */}
+        <section>
+          <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">{t('create.name')}</h2>
+          <Input
+            id="name"
+            placeholder={t('create.namePlaceholder')}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+        </section>
+
+        {/* Server */}
+        <section>
+          <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">{t('create.server')}</h2>
+          <div className="relative">
+            {/* Selected Server Display / Trigger */}
+            <button
+              type="button"
+              onClick={() => setIsServerListOpen(!isServerListOpen)}
+              className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-input bg-white hover:border-gray-300 transition-colors text-left"
+            >
+              {selectedServerId ? (
+                <span className="font-medium text-gray-900">
+                  {selectedServerId === 'all' ? t('create.allServers') : selectedServer?.name}
+                </span>
+              ) : (
+                <span className="text-gray-400">{t('create.selectServer') || 'Select a server...'}</span>
+              )}
+              <ChevronDown className={`w-5 h-5 text-gray-400 transition-transform ${isServerListOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {/* Dropdown List */}
+            {isServerListOpen && (
+              <div className="absolute z-10 mt-2 w-full rounded-xl border border-gray-200 bg-white shadow-lg overflow-hidden">
+                <div className="p-3 border-b border-gray-100">
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50">
+                    <Search className="w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder={t('create.searchServers') || 'Search servers...'}
+                      value={serverSearchQuery}
+                      onChange={(e) => setServerSearchQuery(e.target.value)}
+                      className="flex-1 bg-transparent text-sm focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
+                  {/* All Servers Option */}
+                  <button
+                    type="button"
+                    onClick={() => handleSelectServer('all')}
+                    className={`w-full flex items-center justify-between p-3 transition-colors text-left ${
+                      selectedServerId === 'all'
+                        ? 'bg-violet-50'
+                        : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <span className="font-medium text-gray-900">{t('create.allServers')}</span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600">
+                        {workspaceServers.length}
+                      </span>
+                      {selectedServerId === 'all' && (
+                        <Check className="w-5 h-5 text-violet-600" />
+                      )}
+                    </div>
+                  </button>
+
+                  {/* Individual Servers */}
+                  {filteredServers.length === 0 ? (
+                    <div className="p-6 text-center text-gray-500">
+                      <p className="text-sm">{serverSearchQuery ? 'No servers found' : 'No servers available'}</p>
+                    </div>
+                  ) : (
+                    filteredServers.map((server) => (
+                      <button
+                        key={server.id}
+                        type="button"
+                        onClick={() => handleSelectServer(server.id)}
+                        className={`w-full flex items-center justify-between p-3 transition-colors text-left ${
+                          selectedServerId === server.id
+                            ? 'bg-violet-50'
+                            : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        <span className="font-medium text-gray-900 truncate">{server.name}</span>
+                        {selectedServerId === server.id && (
+                          <Check className="w-5 h-5 text-violet-600 flex-shrink-0" />
+                        )}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Scopes */}
+        <section>
+          <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">{t('scopes.title')}</h2>
+
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+            {/* Full Access */}
+            <div
+              onClick={() => toggleScope('*')}
+              className="flex items-center gap-2 cursor-pointer select-none"
+            >
+              <span className="text-sm font-medium text-gray-700">{t('scopes.fullAccess')}</span>
+              <div className={`w-11 h-6 rounded-full p-0.5 transition-colors ${
+                selectedScopes.includes('*') ? 'bg-violet-600' : 'bg-gray-300'
+              }`}>
+                <div className={`w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                  selectedScopes.includes('*') ? 'translate-x-5' : 'translate-x-0'
+                }`} />
+              </div>
+            </div>
+
+            <div className="w-px h-6 bg-gray-200" />
+
+            {/* Individual Scopes */}
+            {SCOPE_OPTIONS.map((option) => {
+              const isChecked = selectedScopes.includes(option.scope) || selectedScopes.includes('*');
+              const isDisabled = selectedScopes.includes('*');
+              return (
+                <div
+                  key={option.id}
+                  onClick={() => !isDisabled && toggleScope(option.scope)}
+                  className={`flex items-center gap-2 select-none ${isDisabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <span className="text-sm font-medium text-gray-700">{option.label}</span>
+                  <div className={`w-11 h-6 rounded-full p-0.5 transition-colors ${
+                    isChecked ? 'bg-violet-600' : 'bg-gray-300'
+                  }`}>
+                    <div className={`w-5 h-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+                      isChecked ? 'translate-x-5' : 'translate-x-0'
+                    }`} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-6">
+            <Label htmlFor="customScope" className="text-gray-700">{t('customScope')}</Label>
+            <div className="flex gap-2 mt-2">
+              <Input
+                id="customScope"
+                placeholder="tools:call:specific_tool_name"
+                value={customScope}
+                onChange={(e) => setCustomScope(e.target.value)}
+              />
+              <Button type="button" variant="outline" onClick={addCustomScope}>
+                {tCommon('add')}
+              </Button>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">{t('customScopeExamples')}</p>
+          </div>
+
+          {selectedScopes.length > 0 && !selectedScopes.includes('*') && (
+            <div className="mt-6">
+              <Label className="text-gray-700 mb-2 block">{t('scopes.selected')}</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {selectedScopes.map((scope) => (
+                  <span
+                    key={scope}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-sm bg-violet-100 text-violet-700 rounded-md"
+                  >
+                    <code className="text-xs font-mono">{scope}</code>
+                    <button
+                      type="button"
+                      onClick={() => removeScope(scope)}
+                      className="text-violet-400 hover:text-violet-600 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Error Message */}
+        {createMutation.isError && (
+          <p className="text-sm text-red-600">{createErrorMessage}</p>
+        )}
+
+        {/* Actions */}
+        <div className="flex justify-end gap-2.5 pt-4 border-t border-gray-100">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => router.push('/dashboard/auth/access-tokens')}
+            className="h-10 px-4 rounded-lg border-[#d1d5db] text-[#374151] text-sm font-medium hover:bg-[#f3f4f6] transition-colors duration-200"
+          >
+            {tCommon('cancel')}
+          </Button>
+          <Button
+            type="submit"
+            disabled={createMutation.isPending || !workspaceId || !selectedServerId}
+            className="h-10 px-4 rounded-lg bg-violet-500 hover:bg-violet-600 border border-violet-600 text-white text-sm font-medium gap-2 transition-colors duration-200"
+          >
+            {createMutation.isPending ? (
+              <div className="w-4 h-4 border-2 rounded-full border-white/30 border-t-white animate-spin" />
+            ) : (
+              <>
+                <Plus className="w-4 h-4" />
+                {t('create.submit')}
+              </>
+            )}
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+}

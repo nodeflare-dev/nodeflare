@@ -28,7 +28,8 @@
     "showing": "{from}から{to}件を表示（全{total}件）",
     "notFound": "見つかりませんでした",
     "retry": "再試行",
-    "copied": "コピーしました！"
+    "copied": "コピーしました！",
+    "done": "完了"
   },
   "nav": {
     "home": "ホーム",
