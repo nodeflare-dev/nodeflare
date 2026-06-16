@@ -165,8 +165,29 @@ struct OAuthServerMetadata {
 /// OAuth metadata endpoint - returns API server's OAuth endpoints
 async fn oauth_metadata(
     State(state): State<Arc<ProxyState>>,
-) -> Json<OAuthServerMetadata> {
-    tracing::info!("OAuth metadata requested from proxy");
+    Host(host): Host,
+) -> Response {
+    tracing::info!("OAuth metadata requested from proxy, host={}", host);
+
+    // If the target server has NodeFlare auth disabled, do NOT advertise OAuth
+    // authorization-server metadata. Some MCP clients key auth discovery off this
+    // endpoint (the older 2025-03-26 flow) and would start an OAuth flow even though
+    // the proxy forwards requests without requiring any credentials. Returning 404
+    // keeps the "no auth" contract consistent with the protected-resource and MCP
+    // endpoints (both already signal "not protected" for auth-disabled servers).
+    // Note: if the subdomain can't be resolved to a running server we fall through to
+    // advertising metadata to avoid changing edge-case responses.
+    if let Ok(slug) = extract_subdomain(&host, &state.config.server.proxy_base_domain) {
+        if let Ok(server) = resolve_server(&state, &slug).await {
+            if !server.auth_enabled {
+                tracing::info!(
+                    "Auth disabled for server {}, not advertising OAuth authorization-server metadata",
+                    slug
+                );
+                return StatusCode::NOT_FOUND.into_response();
+            }
+        }
+    }
 
     let api_url = std::env::var("API_URL").unwrap_or_else(|_| {
         format!("http://{}:{}", state.config.server.host, state.config.server.port)
@@ -191,6 +212,7 @@ async fn oauth_metadata(
             "none".to_string(),
         ],
     })
+    .into_response()
 }
 
 /// OAuth 2.0 Protected Resource Metadata (RFC 9728)
@@ -586,13 +608,16 @@ async fn forward_request(
         .await
         .map_err(|e| ProxyError::BadRequest(format!("Failed to read body: {}", e)))?;
 
-    // Log request body for debugging
-    let req_body_preview = if body_bytes.len() > 500 {
-        format!("{}... (truncated)", String::from_utf8_lossy(&body_bytes[..500]))
-    } else {
-        String::from_utf8_lossy(&body_bytes).to_string()
-    };
-    tracing::info!("forward_request: method={}, is_sse={}, request_body={}", method, is_sse, req_body_preview);
+    tracing::info!("forward_request: method={}, is_sse={}", method, is_sse);
+    // Request body may contain sensitive data (tool args, secrets, PII) — log only at DEBUG
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let req_body_preview = if body_bytes.len() > 500 {
+            format!("{}... (truncated)", String::from_utf8_lossy(&body_bytes[..500]))
+        } else {
+            String::from_utf8_lossy(&body_bytes).to_string()
+        };
+        tracing::debug!("forward_request: request_body={}", req_body_preview);
+    }
 
     // Extract MCP request info (method + target)
     let mcp_info = extract_mcp_request_info(&body_bytes);
@@ -673,13 +698,16 @@ async fn forward_request_no_auth(
         .await
         .map_err(|e| ProxyError::BadRequest(format!("Failed to read body: {}", e)))?;
 
-    // Log request body for debugging
-    let req_body_preview = if body_bytes.len() > 500 {
-        format!("{}... (truncated)", String::from_utf8_lossy(&body_bytes[..500]))
-    } else {
-        String::from_utf8_lossy(&body_bytes).to_string()
-    };
-    tracing::info!("forward_request_no_auth: method={}, is_sse={}, request_body={}", method, is_sse, req_body_preview);
+    tracing::info!("forward_request_no_auth: method={}, is_sse={}", method, is_sse);
+    // Request body may contain sensitive data (tool args, secrets, PII) — log only at DEBUG
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let req_body_preview = if body_bytes.len() > 500 {
+            format!("{}... (truncated)", String::from_utf8_lossy(&body_bytes[..500]))
+        } else {
+            String::from_utf8_lossy(&body_bytes).to_string()
+        };
+        tracing::debug!("forward_request_no_auth: request_body={}", req_body_preview);
+    }
 
     // Extract MCP request info (method + target) for logging purposes
     let mcp_info = extract_mcp_request_info(&body_bytes);
@@ -817,13 +845,16 @@ async fn execute_upstream_request(
         .await
         .map_err(|e| ProxyError::Internal(format!("Failed to read response: {}", e)))?;
 
-    // Log response body for debugging (truncate if too long)
-    let body_preview = if body.len() > 500 {
-        format!("{}... (truncated, total {} bytes)", String::from_utf8_lossy(&body[..500]), body.len())
-    } else {
-        String::from_utf8_lossy(&body).to_string()
-    };
-    tracing::info!("upstream response: status={}, body={}", status, body_preview);
+    tracing::info!("upstream response: status={}", status);
+    // Response body may contain sensitive data — log only at DEBUG
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let body_preview = if body.len() > 500 {
+            format!("{}... (truncated, total {} bytes)", String::from_utf8_lossy(&body[..500]), body.len())
+        } else {
+            String::from_utf8_lossy(&body).to_string()
+        };
+        tracing::debug!("upstream response: body={}", body_preview);
+    }
 
     Ok((body.to_vec(), status, headers))
 }
@@ -837,8 +868,20 @@ async fn execute_streaming_request(
     headers: &axum::http::HeaderMap,
     body_bytes: Bytes,
 ) -> Result<Response, ProxyError> {
-    // Build outgoing request - use a client without timeout for SSE
+    // Build outgoing request for SSE/streaming.
+    // No *total* timeout: MCP SSE streams (event channel + long tool calls) are
+    // legitimately long-lived. Instead guard against stalled upstreams:
+    //   - connect_timeout: bound TCP/TLS setup to the upstream edge.
+    //   - read_timeout: idle timeout that resets on every chunk/keepalive, so a
+    //     healthy stream stays open indefinitely while a silent (hung) upstream is
+    //     dropped instead of hanging forever (the failure we observed).
+    let sse_idle_timeout_secs = std::env::var("PROXY_SSE_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(120);
     let sse_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(sse_idle_timeout_secs))
         .build()
         .map_err(|e| ProxyError::Internal(format!("Failed to create SSE client: {}", e)))?;
 
