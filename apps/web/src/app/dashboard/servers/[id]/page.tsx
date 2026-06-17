@@ -453,13 +453,14 @@ export default function ServerDetailPage() {
         {server.status === 'running' && server.endpoint_url && (
           <button
             onClick={() => {
-              navigator.clipboard.writeText(`https://${server.slug}.${process.env.NEXT_PUBLIC_PROXY_BASE_DOMAIN || 'nodeflare.tech'}`);
+              const mcpPath = (server.mcp_path || '/mcp').startsWith('/') ? (server.mcp_path || '/mcp') : `/${server.mcp_path}`;
+              navigator.clipboard.writeText(`https://${server.slug}.${process.env.NEXT_PUBLIC_PROXY_BASE_DOMAIN || 'nodeflare.tech'}${mcpPath}`);
             }}
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 bg-violet-50 hover:bg-violet-100 rounded-full transition-colors group flex-shrink-0"
             title={t('detail.copyEndpoint')}
           >
             <span className="text-gray-500 hidden sm:inline">{t('detail.endpoint')}</span>
-            <code className="font-medium text-violet-700 font-mono text-xs sm:text-sm truncate max-w-[150px] sm:max-w-none">{server.slug}.{process.env.NEXT_PUBLIC_PROXY_BASE_DOMAIN || 'nodeflare.tech'}</code>
+            <code className="font-medium text-violet-700 font-mono text-xs sm:text-sm truncate max-w-[150px] sm:max-w-none">{server.slug}.{process.env.NEXT_PUBLIC_PROXY_BASE_DOMAIN || 'nodeflare.tech'}{(server.mcp_path || '/mcp').startsWith('/') ? (server.mcp_path || '/mcp') : `/${server.mcp_path}`}</code>
             <Copy className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-violet-400 group-hover:text-violet-600 flex-shrink-0" />
           </button>
         )}

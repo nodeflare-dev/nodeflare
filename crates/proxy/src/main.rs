@@ -919,7 +919,7 @@ async fn execute_streaming_request(
                     tracing::debug!("SSE streaming: preserving upstream content-type: {}", val);
                 }
             }
-            "cache-control" | "x-request-id" | "mcp-session-id" | "x-accel-buffering" => {
+            "content-encoding" | "cache-control" | "x-request-id" | "mcp-session-id" | "x-accel-buffering" => {
                 if let Ok(val) = value.to_str() {
                     builder = builder.header(header_name, val);
                 }

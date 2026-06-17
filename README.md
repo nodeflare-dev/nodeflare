@@ -8,11 +8,11 @@ Deploy, manage, and scale MCP servers — Vercel for MCP.
 
 ## What is Nodeflare?
 
-Nodeflare is an MCP (Model Context Protocol) hosting platform that lets you deploy any MCP server with just a GitHub URL. It automatically converts stdio-based MCP servers to SSE format, making them accessible from browser-based AI assistants like Claude.
+Nodeflare is an MCP (Model Context Protocol) hosting platform that lets you deploy any MCP server with just a GitHub URL. It automatically converts stdio-based MCP servers to the Streamable HTTP transport, making them accessible from remote AI assistants like Claude.
 
 **Key Features:**
 - 🚀 **One-click deployment** — Just paste a GitHub URL
-- 🔄 **Automatic stdio→SSE conversion** — Works with any MCP server
+- 🔄 **Automatic stdio→Streamable HTTP conversion** — Works with any MCP server
 - 🔐 **Built-in authentication** — API keys, OAuth 2.0, scoped permissions
 - 📊 **Access logging** — Full audit trail for enterprise compliance
 - 🌍 **Global edge deployment** — Powered by Fly.io
