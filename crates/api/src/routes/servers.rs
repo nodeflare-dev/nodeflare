@@ -6,7 +6,7 @@ use axum::{
 use chrono::Datelike;
 use mcp_billing::Plan as BillingPlan;
 use mcp_common::types::{CreateServerRequest, PaginationParams, ServerResponse, ServerMinimalResponse, ServerBasicResponse, ServerListResponse, UpdateServerRequest};
-use mcp_db::{CreateDeployment, CreateOAuthClient, CreateServer, CreateServerRegion, DeploymentRepository, OAuthClientRepository, ServerRegionRepository, ServerRepository, UpdateServer, WorkspaceRepository};
+use mcp_db::{CreateDeployment, CreateServer, CreateServerRegion, DeploymentRepository, ServerRegionRepository, ServerRepository, UpdateServer, WorkspaceRepository};
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -462,41 +462,9 @@ pub async fn create(
         AppError::internal("Failed to create server region. Please try again.")
     })?;
 
-    // Auto-create OAuth client for Claude integration
-    let oauth_client_id = format!("mcp_{}", Uuid::new_v4().to_string().replace("-", ""));
-    let oauth_client_secret = format!("mcs_{}", Uuid::new_v4().to_string().replace("-", ""));
-    let secret_hash = {
-        use sha2::{Sha256, Digest};
-        let mut hasher = Sha256::new();
-        hasher.update(oauth_client_secret.as_bytes());
-        format!("{:x}", hasher.finalize())
-    };
-
-    OAuthClientRepository::create(
-        &state.db,
-        CreateOAuthClient {
-            client_id: oauth_client_id.clone(),
-            client_secret_hash: Some(secret_hash),
-            client_name: format!("{} - Claude Integration", server.name),
-            redirect_uris: vec!["https://claude.ai/api/mcp/auth_callback".to_string()],
-            grant_types: vec!["authorization_code".to_string(), "refresh_token".to_string()],
-            token_endpoint_auth_method: "client_secret_basic".to_string(),
-            workspace_id: Some(workspace_id),
-            server_id: Some(server.id),
-            scopes: vec!["*".to_string()], // Full access by default
-            is_dynamic: false,
-            software_id: None,
-            software_version: None,
-        },
-    )
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to create OAuth client for server: {}", e);
-        // Don't fail server creation for OAuth, just log
-    })
-    .ok();
-
-    tracing::info!("Created OAuth client {} for server {}", oauth_client_id, server.id);
+    // NOTE: OAuth clients are intentionally NOT auto-created on server creation.
+    // Users create an OAuth app explicitly from the OAuth apps page when they need
+    // one, so enabling auth no longer silently provisions a Claude OAuth client.
 
     // Auto-deploy: Trigger initial deployment after server creation
     tracing::info!("Auto-deploying new server {}", server.id);
