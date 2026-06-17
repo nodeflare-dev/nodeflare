@@ -605,7 +605,7 @@ export default function NewServerPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <span className="block font-semibold text-sm text-[#323232]">
-                  SSE
+                  Streamable HTTP
                 </span>
                 <span className={`block text-xs mt-0.5 ${formData.transport === 'sse' ? 'text-violet-600' : 'text-gray-500'}`}>
                   {t('create.transportSseDesc')}

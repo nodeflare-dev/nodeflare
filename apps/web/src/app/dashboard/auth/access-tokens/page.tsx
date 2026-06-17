@@ -300,18 +300,18 @@ function AccessTokenRow({
 
       {/* Confirm revoke modal */}
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-w-[calc(100%-2rem)] sm:max-w-md mx-4 sm:mx-auto">
           <AlertDialogHeader>
             <AlertDialogTitle>{t('revoke')}</AlertDialogTitle>
             <AlertDialogDescription>{t('revokeConfirm')}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>{tCommon('no')}</AlertDialogCancel>
+            <AlertDialogCancel>{tCommon('cancel')}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirm}
-              className="bg-red-600 hover:bg-red-700 text-white border border-red-800"
+              className="bg-red-600 hover:bg-red-700"
             >
-              {tCommon('yes')}
+              {tCommon('delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

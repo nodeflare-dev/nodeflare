@@ -1,23 +1,31 @@
 #!/usr/bin/env node
 /**
- * STDIO-to-SSE Adapter for MCP Servers
+ * STDIO-to-HTTP Adapter for MCP Servers
  *
- * This adapter wraps a STDIO-based MCP server and exposes it as an HTTP/SSE endpoint.
- * It spawns the MCP server as a subprocess and translates between HTTP and STDIO.
+ * Wraps a STDIO-based MCP server and exposes it over HTTP using the modern
+ * **Streamable HTTP** transport (single endpoint, request/response in the POST
+ * body, `Mcp-Session-Id` header, optional GET stream for server->client messages).
+ *
+ * The deprecated 2024-11-05 HTTP+SSE transport (GET stream that emits
+ * `event: endpoint` + separate `POST /mcp/message`) is kept working for older
+ * clients (dual support).
  *
  * Usage: node stdio-adapter.cjs <command> [args...]
  *
  * Environment variables:
  * - PORT: HTTP server port (default: 3000)
- * - MCP_PATH: Path prefix for MCP endpoints (default: /mcp)
+ * - MCP_PATH: Path of the MCP endpoint (default: /mcp)
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { URL } = require('url');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const MCP_PATH = process.env.MCP_PATH || '/mcp';
+const REQUEST_TIMEOUT_MS = 30000;
+const KEEPALIVE_MS = 25000;
 
 // Get the command to run from arguments
 const args = process.argv.slice(2);
@@ -46,51 +54,103 @@ for (const arg of commandArgs) {
 }
 
 console.log(`[Adapter] Starting STDIO adapter for: ${command} ${commandArgs.join(' ')}`);
-console.log(`[Adapter] Listening on port ${PORT}, MCP path: ${MCP_PATH}`);
+console.log(`[Adapter] Listening on port ${PORT}, MCP path: ${MCP_PATH} (Streamable HTTP + legacy SSE)`);
 
-// Spawn the MCP server process
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
 let mcpProcess = null;
 let messageBuffer = '';
-const pendingResponses = new Map(); // id -> { resolve, reject, timeout }
-const sseClients = new Set();
-let nextRequestId = 1;
 let isInitialized = false;
 let initializePromise = null;
 
-// Auto-initialize the MCP process
+// Single child process is shared by all callers. To avoid cross-request id
+// collisions we remap every *client request* id to a unique internal id and
+// restore the original id on the matching response.
+//   pending: internalId -> { resolve, reject, timeout, clientId }
+const pending = new Map();
+let nextInternalId = 1;
+
+// Open server->client streams (GET on MCP_PATH / legacy /sse). Used to deliver
+// server-initiated messages and legacy SSE responses.
+const streams = new Set();
+
+// Streamable HTTP session id (single shared child => single logical session).
+let sessionId = null;
+
+// ---------------------------------------------------------------------------
+// Talking to the child process
+// ---------------------------------------------------------------------------
+
+// Send a request to the child and resolve with its response (id-remapped).
+function sendRequest(message) {
+  return new Promise((resolve, reject) => {
+    if (!mcpProcess || mcpProcess.killed) {
+      reject(new Error('MCP process not running'));
+      return;
+    }
+    const internalId = `nf-${nextInternalId++}`;
+    const clientId = message.id;
+    const timeout = setTimeout(() => {
+      pending.delete(internalId);
+      reject(new Error('Request timeout'));
+    }, REQUEST_TIMEOUT_MS);
+    pending.set(internalId, { resolve, reject, timeout, clientId });
+
+    const outgoing = { ...message, id: internalId };
+    try {
+      mcpProcess.stdin.write(JSON.stringify(outgoing) + '\n');
+    } catch (err) {
+      clearTimeout(timeout);
+      pending.delete(internalId);
+      reject(err);
+    }
+  });
+}
+
+// Fire-and-forget write to the child (notifications, or client responses to
+// server-initiated requests, or legacy-mode requests). No id remapping: the
+// child's reply (if any) flows back out via broadcastToStreams.
+function sendRaw(message) {
+  if (!mcpProcess || mcpProcess.killed) {
+    throw new Error('MCP process not running');
+  }
+  mcpProcess.stdin.write(JSON.stringify(message) + '\n');
+}
+
+function broadcastToStreams(message) {
+  if (streams.size === 0) return;
+  const data = JSON.stringify(message);
+  for (const client of streams) {
+    try {
+      client.write(`event: message\ndata: ${data}\n\n`);
+    } catch (err) {
+      console.error('[Adapter] Failed to send to stream client:', err);
+      streams.delete(client);
+    }
+  }
+}
+
+// Auto-initialize the child once on startup so it's warm and we can detect a
+// healthy process. Clients still send their own initialize, which is forwarded.
 async function autoInitialize() {
   if (isInitialized || !mcpProcess || mcpProcess.killed) {
     return;
   }
-
   console.log('[Adapter] Auto-initializing MCP process...');
-
   try {
-    // Send initialize request
-    const initResponse = await sendToMcpInternal({
+    await sendRequest({
       jsonrpc: '2.0',
       method: 'initialize',
-      id: nextRequestId++,
       params: {
         protocolVersion: '2024-11-05',
         capabilities: {},
-        clientInfo: {
-          name: 'stdio-adapter',
-          version: '1.0.0'
-        }
-      }
+        clientInfo: { name: 'stdio-adapter', version: '1.0.0' },
+      },
     });
-
-    console.log('[Adapter] Initialize response:', JSON.stringify(initResponse));
-
-    // Send initialized notification
     if (mcpProcess && !mcpProcess.killed) {
-      mcpProcess.stdin.write(JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'notifications/initialized'
-      }) + '\n');
+      sendRaw({ jsonrpc: '2.0', method: 'notifications/initialized' });
     }
-
     isInitialized = true;
     console.log('[Adapter] MCP process initialized successfully');
   } catch (err) {
@@ -99,44 +159,43 @@ async function autoInitialize() {
   }
 }
 
-// Internal send function (doesn't wait for initialization)
-function sendToMcpInternal(message) {
-  return new Promise((resolve, reject) => {
-    if (!mcpProcess || mcpProcess.killed) {
-      reject(new Error('MCP process not running'));
-      return;
-    }
-
-    const id = message.id ?? nextRequestId++;
-    const messageWithId = { ...message, id };
-
-    const timeout = setTimeout(() => {
-      pendingResponses.delete(id);
-      reject(new Error('Request timeout'));
-    }, 30000);
-
-    pendingResponses.set(id, { resolve, reject, timeout });
-
+function processBuffer() {
+  // MCP uses newline-delimited JSON
+  const lines = messageBuffer.split('\n');
+  messageBuffer = lines.pop() || ''; // Keep incomplete line in buffer
+  for (const line of lines) {
+    if (!line.trim()) continue;
     try {
-      mcpProcess.stdin.write(JSON.stringify(messageWithId) + '\n');
+      handleMcpMessage(JSON.parse(line));
     } catch (err) {
-      clearTimeout(timeout);
-      pendingResponses.delete(id);
-      reject(err);
+      console.error('[Adapter] Failed to parse MCP message:', line, err);
     }
-  });
+  }
+}
+
+function handleMcpMessage(message) {
+  // Response to one of our remapped requests?
+  if (message.id !== undefined && message.id !== null && pending.has(message.id)) {
+    const { resolve, timeout, clientId } = pending.get(message.id);
+    clearTimeout(timeout);
+    pending.delete(message.id);
+    resolve({ ...message, id: clientId }); // restore the caller's original id
+    return;
+  }
+  // Otherwise it's a server-initiated request/notification, or a legacy-mode
+  // response: push it to any open server->client stream.
+  broadcastToStreams(message);
 }
 
 function startMcpProcess() {
   console.log(`[Adapter] Spawning MCP process: ${command} ${commandArgs.join(' ')}`);
-
   isInitialized = false;
   initializePromise = null;
 
   mcpProcess = spawn(command, commandArgs, {
     stdio: ['pipe', 'pipe', 'inherit'],
     env: { ...process.env },
-    shell: false  // Security: Disable shell to prevent command injection
+    shell: false, // Security: Disable shell to prevent command injection
   });
 
   mcpProcess.stdout.on('data', (data) => {
@@ -152,13 +211,14 @@ function startMcpProcess() {
     console.log(`[Adapter] MCP process exited with code ${code}, signal ${signal}`);
     isInitialized = false;
     initializePromise = null;
+    sessionId = null;
 
-    // Clear pending responses
-    for (const [id, { reject, timeout }] of pendingResponses) {
+    // Reject pending requests
+    for (const [, { reject, timeout }] of pending) {
       clearTimeout(timeout);
       reject(new Error('MCP process exited'));
     }
-    pendingResponses.clear();
+    pending.clear();
 
     // Restart after a delay
     setTimeout(() => {
@@ -167,124 +227,153 @@ function startMcpProcess() {
     }, 1000);
   });
 
-  // Auto-initialize after a short delay to let process start
+  // Auto-initialize after a short delay to let the process start
   setTimeout(() => {
-    initializePromise = autoInitialize().catch(err => {
+    initializePromise = autoInitialize().catch((err) => {
       console.error('[Adapter] Failed to auto-initialize:', err);
     });
   }, 500);
 }
 
-function processBuffer() {
-  // MCP uses newline-delimited JSON
-  const lines = messageBuffer.split('\n');
-  messageBuffer = lines.pop() || ''; // Keep incomplete line in buffer
+// ---------------------------------------------------------------------------
+// HTTP server
+// ---------------------------------------------------------------------------
 
-  for (const line of lines) {
-    if (!line.trim()) continue;
+function isRequestMessage(m) {
+  return m && typeof m.method === 'string' && m.id !== undefined && m.id !== null;
+}
 
+function openStream(req, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  streams.add(res);
+  console.log(`[Adapter] Stream opened, total: ${streams.size}`);
+
+  // Legacy SSE transport: tell old clients where to POST. Streamable HTTP
+  // clients ignore unknown SSE events, so this is harmless to them.
+  res.write(`event: endpoint\ndata: ${MCP_PATH}/message\n\n`);
+
+  const keepalive = setInterval(() => {
     try {
-      const message = JSON.parse(line);
-      handleMcpMessage(message);
+      res.write(`:ping\n\n`);
     } catch (err) {
-      console.error('[Adapter] Failed to parse MCP message:', line, err);
+      clearInterval(keepalive);
     }
-  }
+  }, KEEPALIVE_MS);
+
+  req.on('close', () => {
+    clearInterval(keepalive);
+    streams.delete(res);
+    console.log(`[Adapter] Stream closed, total: ${streams.size}`);
+  });
 }
 
-function handleMcpMessage(message) {
-  // Check if this is a response to a pending request
-  if (message.id !== undefined && pendingResponses.has(message.id)) {
-    const { resolve, timeout } = pendingResponses.get(message.id);
-    clearTimeout(timeout);
-    pendingResponses.delete(message.id);
-    resolve(message);
-    return;
-  }
-
-  // Otherwise, it's a notification or server-initiated message
-  // Broadcast to all SSE clients
-  broadcastToSseClients(message);
-}
-
-function broadcastToSseClients(message) {
-  const data = JSON.stringify(message);
-  console.log(`[Adapter] Broadcasting to ${sseClients.size} SSE clients: ${data.substring(0, 100)}...`);
-  for (const client of sseClients) {
+async function handlePost(req, res, path) {
+  let body = '';
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+  req.on('end', async () => {
     try {
-      // MCP SSE transport spec: use "event: message" for JSON-RPC messages
-      client.write(`event: message\ndata: ${data}\n\n`);
+      const parsed = JSON.parse(body);
+
+      // Make sure the child is up before forwarding.
+      if (initializePromise) {
+        await initializePromise.catch(() => {});
+      }
+
+      const clientSession = req.headers['mcp-session-id'];
+      // Legacy detection (behind the proxy the path is flattened to MCP_PATH, so
+      // we cannot rely on /message): treat as legacy when the request explicitly
+      // used the legacy message path, OR it carries no session id while a
+      // server->client stream is already open (the legacy client opens the SSE
+      // stream first and never sends Mcp-Session-Id).
+      const legacy =
+        path === `${MCP_PATH}/message` || (!clientSession && streams.size > 0);
+
+      const messages = Array.isArray(parsed) ? parsed : [parsed];
+      const requests = messages.filter(isRequestMessage);
+      const others = messages.filter((m) => !isRequestMessage(m));
+
+      // Forward notifications / client responses (no reply expected here).
+      for (const m of others) {
+        if (m && m.method === 'notifications/initialized' && isInitialized) {
+          continue; // child was already initialized by autoInitialize
+        }
+        try {
+          sendRaw(m);
+        } catch (err) {
+          console.error('[Adapter] Failed to forward message:', err);
+        }
+      }
+
+      // No requests -> nothing to wait for.
+      if (requests.length === 0) {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+
+      if (legacy) {
+        // Legacy SSE: forward with original ids; responses are delivered on the
+        // client's open SSE stream via broadcastToStreams.
+        for (const m of requests) sendRaw(m);
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+
+      // Streamable HTTP: await responses and return them in the POST body.
+      const responses = await Promise.all(requests.map((m) => sendRequest(m)));
+
+      const headers = { 'Content-Type': 'application/json' };
+      if (requests.some((m) => m.method === 'initialize') && !sessionId) {
+        sessionId = crypto.randomUUID();
+      }
+      if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+
+      const payload = Array.isArray(parsed) ? responses : responses[0];
+      res.writeHead(200, headers);
+      res.end(JSON.stringify(payload));
     } catch (err) {
-      console.error('[Adapter] Failed to send to SSE client:', err);
-      sseClients.delete(client);
+      console.error('[Adapter] Error processing message:', err);
+      // JSON-RPC 2.0 error codes: -32700 parse, -32000 server, -32603 internal
+      let errorCode = -32603;
+      let statusCode = 500;
+      if (err instanceof SyntaxError) {
+        errorCode = -32700;
+        statusCode = 400;
+      } else if (err.message?.includes('not running')) {
+        errorCode = -32000;
+      }
+      res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: errorCode, message: err.message },
+          id: null,
+        })
+      );
     }
-  }
+  });
 }
 
-// Send message to MCP without waiting for response (for SSE transport)
-// Response will be pushed to SSE clients via handleMcpMessage -> broadcastToSseClients
-function sendToMcpForSse(message) {
-  if (!mcpProcess || mcpProcess.killed) {
-    throw new Error('MCP process not running');
-  }
-
-  console.log(`[Adapter] Sending to MCP (SSE mode): ${JSON.stringify(message).substring(0, 100)}...`);
-  mcpProcess.stdin.write(JSON.stringify(message) + '\n');
-}
-
-// Check if message is a notification (no response expected)
-// Per JSON-RPC 2.0 spec: A Notification is a Request object without an "id" member
-function isNotification(message) {
-  return message.id === undefined;
-}
-
-// Send notification to MCP (fire-and-forget, no response expected)
-async function sendNotificationToMcp(message) {
-  // Wait for initialization to complete (if in progress)
-  if (initializePromise) {
-    await initializePromise;
-  }
-
-  if (!mcpProcess || mcpProcess.killed) {
-    throw new Error('MCP process not running');
-  }
-
-  // If client sends initialized notification and we already sent it, skip
-  if (message.method === 'notifications/initialized' && isInitialized) {
-    console.log('[Adapter] Skipping duplicate initialized notification');
-    return;
-  }
-
-  // Send without id, don't wait for response
-  mcpProcess.stdin.write(JSON.stringify(message) + '\n');
-}
-
-// Send request to MCP and wait for response
-// Waits for auto-initialization to complete first
-async function sendToMcp(message) {
-  // Wait for initialization to complete (if in progress)
-  if (initializePromise) {
-    await initializePromise;
-  }
-
-  // If client sends initialize, and we're already initialized, still forward it
-  // (some clients expect to do their own initialization)
-  if (message.method === 'initialize' && isInitialized) {
-    console.log('[Adapter] Client sent initialize, but already initialized. Forwarding anyway.');
-  }
-
-  return sendToMcpInternal(message);
-}
-
-// Create HTTP server
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
 
-  // CORS headers
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader(
+    'Access-Control-Allow-Headers',
+    'Content-Type, Authorization, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID'
+  );
+  res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -292,102 +381,40 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Health check - only for /health or GET / without SSE Accept header
+  // Health check
   if (path === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', transport: 'stdio-adapter' }));
     return;
   }
 
-  // SSE endpoint for receiving messages
-  if (path === MCP_PATH || path === `${MCP_PATH}/sse`) {
-    if (req.method === 'GET') {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive'
-      });
-
-      sseClients.add(res);
-      console.log(`[Adapter] SSE client connected, total: ${sseClients.size}`);
-
-      // Send endpoint event (required by MCP SSE transport spec)
-      // This tells the client where to POST messages
-      res.write(`event: endpoint\ndata: ${MCP_PATH}/message\n\n`);
-
-      req.on('close', () => {
-        sseClients.delete(res);
-        console.log(`[Adapter] SSE client disconnected, total: ${sseClients.size}`);
-      });
-
-      return;
-    }
+  // GET stream: Streamable HTTP server->client stream (also serves legacy /sse).
+  if ((path === MCP_PATH || path === `${MCP_PATH}/sse`) && req.method === 'GET') {
+    openStream(req, res);
+    return;
   }
 
-  // Message endpoint for sending messages to MCP server
-  // Supports two modes:
-  // 1. SSE transport (if SSE clients connected): POST returns 202, response via SSE stream
-  // 2. Synchronous mode (no SSE clients): POST returns 200 with response body
-  if (path === `${MCP_PATH}/message` || (path === MCP_PATH && req.method === 'POST')) {
-    if (req.method === 'POST') {
-      let body = '';
-      req.on('data', chunk => { body += chunk; });
-      req.on('end', async () => {
-        try {
-          const message = JSON.parse(body);
-
-          // Wait for initialization to complete (if in progress)
-          if (initializePromise) {
-            await initializePromise;
-          }
-
-          // Check if there are SSE clients connected
-          if (sseClients.size > 0) {
-            // SSE transport mode: send to MCP, response will come via SSE stream
-            sendToMcpForSse(message);
-            // Return 202 Accepted with empty body
-            res.writeHead(202);
-            res.end();
-          } else {
-            // Synchronous mode (for testing, health checks, etc.)
-            // Wait for response and return it directly
-            const response = await sendToMcpInternal(message);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(response));
-          }
-        } catch (err) {
-          console.error('[Adapter] Error processing message:', err);
-          // JSON-RPC 2.0 error codes:
-          // -32700: Parse error (invalid JSON)
-          // -32600: Invalid Request
-          // -32603: Internal error
-          // -32000 to -32099: Server error (implementation-defined)
-          let errorCode = -32603; // Default: Internal error
-          if (err instanceof SyntaxError) {
-            errorCode = -32700; // Parse error
-          } else if (err.message?.includes('not running')) {
-            errorCode = -32000; // Server error: MCP process not running
-          }
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            jsonrpc: '2.0',
-            error: { code: errorCode, message: err.message },
-            id: null
-          }));
-        }
-      });
-      return;
-    }
+  // DELETE: Streamable HTTP session termination.
+  if (path === MCP_PATH && req.method === 'DELETE') {
+    sessionId = null;
+    res.writeHead(204);
+    res.end();
+    return;
   }
 
-  // Fallback health check for GET / without SSE Accept header (for Fly.io health checks)
+  // POST: messages (Streamable HTTP at MCP_PATH; legacy at MCP_PATH/message).
+  if ((path === MCP_PATH || path === `${MCP_PATH}/message`) && req.method === 'POST') {
+    await handlePost(req, res, path);
+    return;
+  }
+
+  // Fallback health check for GET / (Fly.io health checks)
   if (path === '/' && req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', transport: 'stdio-adapter' }));
     return;
   }
 
-  // Not found
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not found' }));
 });
