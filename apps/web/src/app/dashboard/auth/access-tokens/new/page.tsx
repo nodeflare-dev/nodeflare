@@ -35,6 +35,7 @@ export default function NewAccessTokenPage() {
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [selectedScopes, setSelectedScopes] = useState<string[]>(['*']);
   const [customScope, setCustomScope] = useState('');
+  const [expiresInDays, setExpiresInDays] = useState<number | null>(30);
   const [serverSearchQuery, setServerSearchQuery] = useState('');
   const [isServerListOpen, setIsServerListOpen] = useState(false);
 
@@ -149,6 +150,7 @@ export default function NewAccessTokenPage() {
       name,
       server_id: selectedServerId === 'all' ? undefined : selectedServerId,
       scopes: selectedScopes,
+      expires_in_days: expiresInDays ?? undefined,
     });
   };
 
@@ -403,6 +405,35 @@ export default function NewAccessTokenPage() {
               </div>
             </div>
           )}
+        </section>
+
+        {/* Expiration */}
+        <section>
+          <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">{tCommon('expiration')}</h2>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { label: tCommon('expiry1d'), days: 1 as number | null },
+              { label: tCommon('expiry1w'), days: 7 as number | null },
+              { label: tCommon('expiry30d'), days: 30 as number | null },
+              { label: tCommon('expiryNever'), days: null as number | null },
+            ].map((opt) => {
+              const selected = expiresInDays === opt.days;
+              return (
+                <button
+                  key={opt.label}
+                  type="button"
+                  onClick={() => setExpiresInDays(opt.days)}
+                  className={`px-4 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    selected
+                      ? 'bg-violet-50 border-violet-300 text-violet-700'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
         </section>
 
         {/* Error Message */}
