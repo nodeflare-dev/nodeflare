@@ -26,9 +26,20 @@ use crate::extractors::AuthUser;
 use crate::state::AppState;
 
 // Token expiration times
-const ACCESS_TOKEN_EXPIRES_HOURS: i64 = 1;
 const REFRESH_TOKEN_EXPIRES_DAYS: i64 = 30;
 const AUTH_CODE_EXPIRES_MINUTES: i64 = 10;
+// Default access token TTL for clients without an explicit setting (e.g. Claude's
+// dynamically-registered clients). 30 days.
+const DEFAULT_ACCESS_TOKEN_TTL_SECONDS: i64 = 30 * 24 * 3600;
+// Sentinel lifetime used when a client opts into "no expiration" (~100 years).
+const NO_EXPIRATION_SECONDS: i64 = 100 * 365 * 24 * 3600;
+
+/// Compute (expires_at, expires_in_seconds) for an access token from a client's
+/// configured TTL. `None` means no expiration.
+fn access_token_expiry(ttl_seconds: Option<i64>) -> (chrono::DateTime<Utc>, i64) {
+    let secs = ttl_seconds.unwrap_or(NO_EXPIRATION_SECONDS);
+    (Utc::now() + Duration::seconds(secs), secs)
+}
 
 // ====================
 // OAuth Client Management (for workspace owners)
@@ -42,6 +53,9 @@ pub struct CreateOAuthClientRequest {
     pub server_id: Option<Uuid>,
     #[serde(default = "default_scopes")]
     pub scopes: Vec<String>,
+    /// Access token lifetime in days. Omitted/null = no expiration.
+    #[serde(default)]
+    pub expires_in_days: Option<i64>,
 }
 
 fn default_scopes() -> Vec<String> {
@@ -137,6 +151,8 @@ pub async fn create_client(
         is_dynamic: false,
         software_id: None,
         software_version: None,
+        // days -> seconds; omitted/null = no expiration
+        access_token_ttl_seconds: body.expires_in_days.map(|d| d * 24 * 3600),
     };
 
     let client = OAuthClientRepository::create(&state.db, data)
@@ -506,6 +522,9 @@ pub async fn register_client(
         is_dynamic: true,
         software_id: body.software_id.clone(),
         software_version: body.software_version.clone(),
+        // Dynamically-registered clients (e.g. Claude) get a 30-day default so
+        // long-lived connections aren't dropped hourly.
+        access_token_ttl_seconds: Some(DEFAULT_ACCESS_TOKEN_TTL_SECONDS),
     };
 
     let created = OAuthClientRepository::create(&state.db, data)
@@ -866,10 +885,18 @@ async fn exchange_code(
     // Mark code as used
     let _ = OAuthAuthorizationCodeRepository::mark_as_used(&state.db, auth_code.id).await;
 
+    // Access token lifetime comes from the client's configured TTL (default 30d).
+    let client_ttl = OAuthClientRepository::find_by_id(&state.db, auth_code.client_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|c| c.access_token_ttl_seconds)
+        .unwrap_or(Some(DEFAULT_ACCESS_TOKEN_TTL_SECONDS));
+    let (access_expires_at, access_expires_in) = access_token_expiry(client_ttl);
+
     // Generate access token
     let access_token = generate_token(32);
     let access_token_hash = ApiKeyService::hash_key(&access_token);
-    let access_expires_at = Utc::now() + Duration::hours(ACCESS_TOKEN_EXPIRES_HOURS);
 
     let scopes = auth_code.scopes();
 
@@ -928,7 +955,7 @@ async fn exchange_code(
     Ok(Json(TokenResponse {
         access_token,
         token_type: "Bearer".to_string(),
-        expires_in: ACCESS_TOKEN_EXPIRES_HOURS * 3600,
+        expires_in: access_expires_in,
         refresh_token: Some(refresh_token),
         scope: scopes.join(" "),
     }))
@@ -982,10 +1009,18 @@ async fn refresh_access_token(
         let _ = OAuthAccessTokenRepository::revoke(&state.db, access_token_id).await;
     }
 
+    // Access token lifetime comes from the client's configured TTL (default 30d).
+    let client_ttl = OAuthClientRepository::find_by_id(&state.db, stored_token.client_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|c| c.access_token_ttl_seconds)
+        .unwrap_or(Some(DEFAULT_ACCESS_TOKEN_TTL_SECONDS));
+    let (access_expires_at, access_expires_in) = access_token_expiry(client_ttl);
+
     // Generate new access token
     let access_token = generate_token(32);
     let access_token_hash = ApiKeyService::hash_key(&access_token);
-    let access_expires_at = Utc::now() + Duration::hours(ACCESS_TOKEN_EXPIRES_HOURS);
 
     let scopes = stored_token.scopes();
 
@@ -1012,7 +1047,7 @@ async fn refresh_access_token(
     Ok(Json(TokenResponse {
         access_token,
         token_type: "Bearer".to_string(),
-        expires_in: ACCESS_TOKEN_EXPIRES_HOURS * 3600,
+        expires_in: access_expires_in,
         refresh_token: None, // Don't issue new refresh token on refresh
         scope: scopes.join(" "),
     }))

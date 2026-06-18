@@ -16,7 +16,7 @@ impl OAuthClientRepository {
             SELECT id, client_id, client_secret_hash, client_name, redirect_uris,
                    grant_types, token_endpoint_auth_method, workspace_id, server_id,
                    scopes, is_active, is_dynamic, software_id, software_version,
-                   created_at, updated_at
+                   access_token_ttl_seconds, created_at, updated_at
             FROM oauth_clients
             WHERE id = $1
             "#,
@@ -34,7 +34,7 @@ impl OAuthClientRepository {
             SELECT id, client_id, client_secret_hash, client_name, redirect_uris,
                    grant_types, token_endpoint_auth_method, workspace_id, server_id,
                    scopes, is_active, is_dynamic, software_id, software_version,
-                   created_at, updated_at
+                   access_token_ttl_seconds, created_at, updated_at
             FROM oauth_clients
             WHERE client_id = $1
             "#,
@@ -52,7 +52,7 @@ impl OAuthClientRepository {
             SELECT id, client_id, client_secret_hash, client_name, redirect_uris,
                    grant_types, token_endpoint_auth_method, workspace_id, server_id,
                    scopes, is_active, is_dynamic, software_id, software_version,
-                   created_at, updated_at
+                   access_token_ttl_seconds, created_at, updated_at
             FROM oauth_clients
             WHERE server_id = $1
             "#,
@@ -70,7 +70,7 @@ impl OAuthClientRepository {
             SELECT id, client_id, client_secret_hash, client_name, redirect_uris,
                    grant_types, token_endpoint_auth_method, workspace_id, server_id,
                    scopes, is_active, is_dynamic, software_id, software_version,
-                   created_at, updated_at
+                   access_token_ttl_seconds, created_at, updated_at
             FROM oauth_clients
             WHERE workspace_id = $1
             ORDER BY created_at DESC
@@ -92,12 +92,13 @@ impl OAuthClientRepository {
             r#"
             INSERT INTO oauth_clients (client_id, client_secret_hash, client_name, redirect_uris,
                                        grant_types, token_endpoint_auth_method, workspace_id, server_id,
-                                       scopes, is_dynamic, software_id, software_version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                       scopes, is_dynamic, software_id, software_version,
+                                       access_token_ttl_seconds)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             RETURNING id, client_id, client_secret_hash, client_name, redirect_uris,
                       grant_types, token_endpoint_auth_method, workspace_id, server_id,
                       scopes, is_active, is_dynamic, software_id, software_version,
-                      created_at, updated_at
+                      access_token_ttl_seconds, created_at, updated_at
             "#,
         )
         .bind(&data.client_id)
@@ -112,6 +113,7 @@ impl OAuthClientRepository {
         .bind(data.is_dynamic)
         .bind(&data.software_id)
         .bind(&data.software_version)
+        .bind(data.access_token_ttl_seconds)
         .fetch_one(pool)
         .await?;
 

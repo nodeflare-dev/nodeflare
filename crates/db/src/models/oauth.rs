@@ -22,6 +22,9 @@ pub struct OAuthClient {
     pub is_dynamic: bool,
     pub software_id: Option<String>,
     pub software_version: Option<String>,
+    /// Access token lifetime in seconds for tokens issued to this client.
+    /// None = no expiration.
+    pub access_token_ttl_seconds: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -62,6 +65,8 @@ pub struct CreateOAuthClient {
     pub is_dynamic: bool,
     pub software_id: Option<String>,
     pub software_version: Option<String>,
+    /// Access token lifetime in seconds. None = no expiration.
+    pub access_token_ttl_seconds: Option<i64>,
 }
 
 /// OAuth Authorization Code
