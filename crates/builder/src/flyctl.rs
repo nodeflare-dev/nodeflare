@@ -833,20 +833,52 @@ fn convert_to_named_stage(dockerfile: &str, stage_name: &str) -> String {
         }
     }
 
+    // A physical line ending in `\` continues onto the next physical line as
+    // part of the same logical instruction. We must honor the keep/skip
+    // decision made for the instruction's first line across its continuations,
+    // otherwise a continuation that happens to start with a skipped keyword
+    // (e.g. the `CMD` part of `HEALTHCHECK ... \` `CMD ...`) gets dropped while
+    // its leading line is kept, leaving a dangling backslash that swallows the
+    // following instruction.
+    #[derive(PartialEq)]
+    enum Cont {
+        No,
+        Keep,
+        Skip,
+    }
+    let mut cont = Cont::No;
+
     // Process each line
     for (i, line) in lines.iter().enumerate() {
+        let continues = line.trim_end().ends_with('\\');
+
+        // Mid-instruction continuation: stick with the prior decision.
+        match cont {
+            Cont::Skip => {
+                cont = if continues { Cont::Skip } else { Cont::No };
+                continue;
+            }
+            Cont::Keep => {
+                result.push(line.to_string());
+                cont = if continues { Cont::Keep } else { Cont::No };
+                continue;
+            }
+            Cont::No => {}
+        }
+
         let trimmed = line.trim();
 
-        // Skip ENTRYPOINT and CMD from original (we'll use our own)
+        // Skip ENTRYPOINT and CMD from original (we'll use our own), and
+        // EXPOSE (we'll use our own port) — including any continuation lines.
         if trimmed.to_uppercase().starts_with("ENTRYPOINT") ||
-           trimmed.to_uppercase().starts_with("CMD") {
+           trimmed.to_uppercase().starts_with("CMD") ||
+           trimmed.to_uppercase().starts_with("EXPOSE") {
+            cont = if continues { Cont::Skip } else { Cont::No };
             continue;
         }
 
-        // Skip EXPOSE (we'll use our own port)
-        if trimmed.to_uppercase().starts_with("EXPOSE") {
-            continue;
-        }
+        // This line is kept; remember if its instruction continues.
+        cont = if continues { Cont::Keep } else { Cont::No };
 
         // Add stage name to the last FROM instruction
         if trimmed.to_uppercase().starts_with("FROM ") && i == last_from_index {
@@ -1289,5 +1321,61 @@ mod tests {
         let (copy, cmd) = rust_binary_copy_and_cmd(&ProjectStructure::default());
         assert_eq!(copy, "COPY --from=builder /app/target/release/* .");
         assert_eq!(cmd, "\"./server\"");
+    }
+
+    // ---- convert_to_named_stage: line-continuation handling ----
+
+    #[test]
+    fn named_stage_basic_tags_last_from_and_strips_cmd_expose() {
+        let df = "FROM node:20-slim\nWORKDIR /app\nEXPOSE 3000\nCMD [\"node\", \"server.js\"]\n";
+        let out = convert_to_named_stage(df, "app");
+        assert!(out.contains("FROM node:20-slim AS app"));
+        assert!(!out.to_uppercase().contains("EXPOSE"));
+        assert!(!out.to_uppercase().contains("CMD"));
+    }
+
+    #[test]
+    fn named_stage_healthcheck_continuation_kept_intact() {
+        // The bug: `HEALTHCHECK ... \` was kept but its `CMD ...` continuation
+        // line was dropped, leaving a dangling backslash.
+        let df = "FROM node:20-slim\nHEALTHCHECK --interval=30s --timeout=3s \\\n    CMD curl -f http://localhost/health || exit 1\n";
+        let out = convert_to_named_stage(df, "app");
+        // Both physical lines of the HEALTHCHECK must survive together.
+        assert!(out.contains("HEALTHCHECK --interval=30s --timeout=3s \\"));
+        assert!(out.contains("CMD curl -f http://localhost/health || exit 1"));
+        // No instruction line may end with a dangling backslash.
+        for line in out.lines() {
+            if line.trim_end().ends_with('\\') {
+                // Only valid if the *next* line exists as its continuation;
+                // the last line of the output must never dangle.
+                assert_ne!(line, out.lines().last().unwrap());
+            }
+        }
+        assert!(!out.trim_end().ends_with('\\'));
+    }
+
+    #[test]
+    fn named_stage_multi_continuation_keep_held_to_end() {
+        // Two consecutive continuations; the middle/last physical line starts
+        // with CMD but must be kept because line 1 was kept.
+        let df = "FROM node:20-slim\nHEALTHCHECK --interval=30s \\\n  --timeout=3s \\\n  CMD curl -f http://localhost/health || exit 1\nRUN echo done\n";
+        let out = convert_to_named_stage(df, "app");
+        assert!(out.contains("HEALTHCHECK --interval=30s \\"));
+        assert!(out.contains("--timeout=3s \\"));
+        assert!(out.contains("CMD curl -f http://localhost/health || exit 1"));
+        // The instruction *after* the multi-line HEALTHCHECK is preserved.
+        assert!(out.contains("RUN echo done"));
+        assert!(!out.trim_end().ends_with('\\'));
+    }
+
+    #[test]
+    fn named_stage_multiline_cmd_fully_skipped() {
+        // A multi-line CMD must be skipped entirely — no dangling backslash.
+        let df = "FROM node:20-slim\nCMD [\"node\", \\\n    \"server.js\"]\nRUN echo after\n";
+        let out = convert_to_named_stage(df, "app");
+        assert!(!out.to_uppercase().contains("CMD"));
+        assert!(!out.contains("server.js"));
+        assert!(out.contains("RUN echo after"));
+        assert!(!out.trim_end().ends_with('\\'));
     }
 }
