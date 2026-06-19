@@ -129,25 +129,13 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
             </h1>
 
             {/* Meta */}
-            <div className="flex items-center gap-4">
-              {post.author && (
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-gradient-to-br from-violet-400 to-violet-600 rounded-full flex items-center justify-center">
-                    <span className="text-white font-medium">
-                      {post.author.name.charAt(0)}
-                    </span>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{post.author.name}</p>
-                    {post.publishDate && (
-                      <time className="text-sm text-gray-500">
-                        {formatDate(post.publishDate, locale)}
-                      </time>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            {post.publishDate && (
+              <div className="flex items-center gap-4">
+                <time className="text-sm text-gray-500">
+                  {formatDate(post.publishDate, locale)}
+                </time>
+              </div>
+            )}
           </header>
 
           {/* Excerpt */}
@@ -167,23 +155,6 @@ export default async function BlogPostPage({ params }: { params: Promise<{ slug:
             />
           )}
 
-          {/* Author Bio */}
-          {post.author?.bio && (
-            <div className="mt-16 pt-10 border-t border-gray-100">
-              <div className="flex items-start gap-5 bg-gray-50 rounded-2xl p-6">
-                <div className="w-14 h-14 bg-gradient-to-br from-violet-400 to-violet-600 rounded-full flex items-center justify-center flex-shrink-0">
-                  <span className="text-white font-bold text-xl">
-                    {post.author.name.charAt(0)}
-                  </span>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wider mb-1">{t('author')}</p>
-                  <p className="font-bold text-gray-900 mb-2">{post.author.name}</p>
-                  <p className="text-sm text-gray-600 leading-relaxed">{post.author.bio}</p>
-                </div>
-              </div>
-            </div>
-          )}
         </article>
 
         {/* nodeflare Banner */}

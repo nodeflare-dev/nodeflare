@@ -11,7 +11,6 @@ interface BlogPost {
   slug: string;
   excerpt?: string;
   publishDate?: string;
-  author?: { name: string };
   categories: { id: string; name: string }[];
 }
 
