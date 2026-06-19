@@ -138,7 +138,7 @@ pub struct DeployResult {
 }
 
 /// Generate fly.toml content for a server
-fn generate_fly_toml(app_name: &str, region: &str, runtime: &str, transport: &str) -> String {
+fn generate_fly_toml(app_name: &str, region: &str, runtime: &str, transport: &str, memory_mb: u64) -> String {
     // For STDIO transport, always use port 8000 (STDIO adapter's port)
     let internal_port = if transport == "stdio" {
         8000
@@ -173,7 +173,7 @@ primary_region = "{region}"
     soft_limit = 80
 
 [[vm]]
-  memory = "256mb"
+  memory = "{memory_mb}mb"
   cpu_kind = "shared"
   cpus = 1
 "#
@@ -202,6 +202,13 @@ pub struct ProjectStructure {
     /// Binary name produced by `cargo build` (from `[[bin]]` or `[package].name`).
     /// Used to run the correct executable instead of assuming `./server`.
     pub rust_bin: Option<String>,
+    /// Dependency names from package.json (dependencies + devDependencies).
+    /// Used by system-dependency provisioning to detect e.g. Playwright/Puppeteer.
+    pub node_deps: Vec<String>,
+    /// Dependency names from requirements.txt / pyproject.toml.
+    pub python_deps: Vec<String>,
+    /// Module paths from go.mod `require` entries.
+    pub go_deps: Vec<String>,
 }
 
 impl ProjectStructure {
@@ -285,7 +292,119 @@ pub async fn detect_project_structure(source_dir: &Path) -> ProjectStructure {
         }
     }
 
+    // Dependency names — used by system-dependency provisioning. Best-effort: any
+    // read/parse failure simply leaves the list empty (no provisioning, no change).
+    if structure.has_package_json {
+        if let Ok(content) = std::fs::read_to_string(source_dir.join("package.json")) {
+            structure.node_deps = parse_node_deps(&content);
+        }
+    }
+    if structure.has_requirements_txt {
+        if let Ok(content) = std::fs::read_to_string(source_dir.join("requirements.txt")) {
+            structure.python_deps.extend(parse_requirements_deps(&content));
+        }
+    }
+    if structure.has_pyproject {
+        if let Ok(content) = std::fs::read_to_string(source_dir.join("pyproject.toml")) {
+            structure.python_deps.extend(parse_pyproject_deps(&content));
+        }
+    }
+    if source_dir.join("go.mod").exists() {
+        if let Ok(content) = std::fs::read_to_string(source_dir.join("go.mod")) {
+            structure.go_deps = parse_go_deps(&content);
+        }
+    }
+
     structure
+}
+
+/// Collect dependency names from package.json (dependencies + devDependencies +
+/// optional/peer). Lower-cased. Best-effort: returns empty on parse failure.
+fn parse_node_deps(package_json: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(package_json) else {
+        return out;
+    };
+    for section in ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"] {
+        if let Some(map) = pkg.get(section).and_then(|v| v.as_object()) {
+            for name in map.keys() {
+                out.push(name.to_lowercase());
+            }
+        }
+    }
+    out
+}
+
+/// Extract package names from a requirements.txt (strip version specifiers/extras/markers).
+fn parse_requirements_deps(requirements: &str) -> Vec<String> {
+    requirements
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('-'))
+        .filter_map(|l| {
+            let name: String = l
+                .chars()
+                .take_while(|c| !matches!(c, '=' | '<' | '>' | '~' | '!' | ' ' | ';' | '[' | '(' ))
+                .collect();
+            let name = name.trim().to_lowercase();
+            (!name.is_empty()).then_some(name)
+        })
+        .collect()
+}
+
+/// Extract dependency names from pyproject.toml (PEP 621 `[project].dependencies`
+/// and Poetry `[tool.poetry.dependencies]`). Best-effort.
+fn parse_pyproject_deps(pyproject: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(val) = toml::from_str::<toml::Value>(pyproject) else {
+        return out;
+    };
+    // PEP 621: [project].dependencies = ["name>=1.0", ...]
+    if let Some(arr) = val
+        .get("project")
+        .and_then(|p| p.get("dependencies"))
+        .and_then(|d| d.as_array())
+    {
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                let name: String = s
+                    .chars()
+                    .take_while(|c| !matches!(c, '=' | '<' | '>' | '~' | '!' | ' ' | ';' | '['))
+                    .collect();
+                let name = name.trim().to_lowercase();
+                if !name.is_empty() {
+                    out.push(name);
+                }
+            }
+        }
+    }
+    // Poetry: [tool.poetry.dependencies] is a table of name = "version".
+    if let Some(table) = val
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|p| p.get("dependencies"))
+        .and_then(|d| d.as_table())
+    {
+        for name in table.keys() {
+            out.push(name.to_lowercase());
+        }
+    }
+    out
+}
+
+/// Collect module paths referenced in go.mod `require` entries. Best-effort.
+fn parse_go_deps(go_mod: &str) -> Vec<String> {
+    go_mod
+        .lines()
+        .map(|l| l.trim())
+        .filter_map(|l| {
+            // Lines look like `require github.com/x/y v1.2.3` or, inside a
+            // `require ( ... )` block, just `github.com/x/y v1.2.3`.
+            let l = l.strip_prefix("require ").unwrap_or(l);
+            let first = l.split_whitespace().next()?;
+            (first.contains('/') && first.contains('.')).then(|| first.to_lowercase())
+        })
+        .collect()
 }
 
 /// Derive a Node start command from `package.json` contents.
@@ -374,6 +493,267 @@ fn parse_cargo_bin(cargo_toml: &str) -> Option<String> {
 
 /// Generate Dockerfile if not present
 /// For STDIO transport, wraps the original command with the stdio-adapter.cjs
+// ============================================================================
+// System-dependency provisioning
+//
+// Some MCP servers need a native binary / system library that `npm|pip install`
+// alone does not provide at runtime (headless browsers, ffmpeg, image libs…).
+// A set of detectors inspect the project's dependency names and emit a Provision
+// describing what the image needs; it is then injected into whichever Dockerfile
+// (generated or user-supplied) is being built.
+//
+// Design guarantees:
+//   - Non-regression: if no detector matches, the Provision is empty and the
+//     Dockerfile is left byte-for-byte unchanged.
+//   - Version-safe: browser detectors delegate to the library's own installer
+//     (`npx playwright install`), so the browser always matches the installed
+//     package version — it is derived, never pinned/hardcoded.
+//   - Idempotent: if the Dockerfile already provisions the dependency, injection
+//     is skipped (`skip_if_contains`).
+//   - Fail-safe: anything ambiguous (no FROM, etc.) results in no change.
+// ============================================================================
+
+/// What an image needs to satisfy a detected system dependency.
+#[derive(Debug, Default)]
+pub struct Provision {
+    /// apt packages to install into the (final) image.
+    pub apt_packages: Vec<String>,
+    /// Commands to RUN *after* application dependencies are installed
+    /// (e.g. `npx playwright install --with-deps chromium`).
+    pub post_install: Vec<String>,
+    /// Minimum machine memory (MB) this workload needs.
+    pub min_memory_mb: Option<u64>,
+    /// Notes surfaced to the user that the platform cannot auto-fix
+    /// (e.g. the app must launch the browser with `--no-sandbox`).
+    pub warnings: Vec<String>,
+    /// If the Dockerfile already contains any of these substrings, skip the
+    /// `post_install` steps (the project already provisions it itself).
+    pub skip_if_contains: Vec<String>,
+}
+
+impl Provision {
+    pub fn is_empty(&self) -> bool {
+        self.apt_packages.is_empty() && self.post_install.is_empty() && self.min_memory_mb.is_none()
+    }
+
+    fn merge(&mut self, other: Provision) {
+        for p in other.apt_packages {
+            if !self.apt_packages.contains(&p) {
+                self.apt_packages.push(p);
+            }
+        }
+        self.post_install.extend(other.post_install);
+        self.min_memory_mb = match (self.min_memory_mb, other.min_memory_mb) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        self.warnings.extend(other.warnings);
+        for s in other.skip_if_contains {
+            if !self.skip_if_contains.contains(&s) {
+                self.skip_if_contains.push(s);
+            }
+        }
+    }
+}
+
+fn deps_contain(deps: &[String], needles: &[&str]) -> bool {
+    deps.iter()
+        .any(|d| needles.iter().any(|n| d == n || d.contains(n)))
+}
+
+type Detector = fn(&ProjectStructure) -> Option<Provision>;
+
+/// Ordered list of detectors. Add a new one here to support another dependency.
+const DETECTORS: &[Detector] = &[
+    detect_playwright_node,
+    detect_puppeteer_node,
+    detect_playwright_python,
+    detect_selenium_python,
+    detect_browser_go,
+    detect_ffmpeg_node,
+    detect_opencv_python,
+];
+
+/// Common headless-Chromium memory floor (Chromium ~0.5–1GB; suspend cap is 2GB).
+const BROWSER_MEMORY_MB: u64 = 2048;
+
+fn detect_playwright_node(p: &ProjectStructure) -> Option<Provision> {
+    deps_contain(&p.node_deps, &["playwright", "@playwright/test", "playwright-core"]).then(|| {
+        Provision {
+            // Installs the browser matching the *installed* Playwright version,
+            // plus its OS libraries — independent of the base image.
+            post_install: vec!["npx playwright install --with-deps chromium".to_string()],
+            min_memory_mb: Some(BROWSER_MEMORY_MB),
+            skip_if_contains: vec!["playwright install".to_string()],
+            ..Default::default()
+        }
+    })
+}
+
+fn detect_puppeteer_node(p: &ProjectStructure) -> Option<Provision> {
+    deps_contain(&p.node_deps, &["puppeteer", "puppeteer-core"]).then(|| Provision {
+        post_install: vec!["npx puppeteer browsers install chrome".to_string()],
+        apt_packages: chromium_runtime_libs(),
+        min_memory_mb: Some(BROWSER_MEMORY_MB),
+        warnings: vec![
+            "Puppeteer in a container must launch with `--no-sandbox` (and ideally \
+             `--disable-dev-shm-usage`). Ensure your server passes these args."
+                .to_string(),
+        ],
+        skip_if_contains: vec![
+            "puppeteer browsers install".to_string(),
+            "playwright install".to_string(),
+        ],
+    })
+}
+
+fn detect_playwright_python(p: &ProjectStructure) -> Option<Provision> {
+    deps_contain(&p.python_deps, &["playwright"]).then(|| Provision {
+        post_install: vec!["playwright install --with-deps chromium".to_string()],
+        min_memory_mb: Some(BROWSER_MEMORY_MB),
+        skip_if_contains: vec!["playwright install".to_string()],
+        ..Default::default()
+    })
+}
+
+fn detect_selenium_python(p: &ProjectStructure) -> Option<Provision> {
+    deps_contain(&p.python_deps, &["selenium"]).then(|| Provision {
+        // Selenium Manager (>=4.6) resolves the driver; we just provide a browser.
+        apt_packages: vec!["chromium".to_string(), "chromium-driver".to_string()],
+        min_memory_mb: Some(BROWSER_MEMORY_MB),
+        warnings: vec![
+            "Selenium in a container should launch Chrome with `--no-sandbox`."
+                .to_string(),
+        ],
+        ..Default::default()
+    })
+}
+
+fn detect_browser_go(p: &ProjectStructure) -> Option<Provision> {
+    deps_contain(&p.go_deps, &["go-rod/rod", "chromedp/chromedp"]).then(|| Provision {
+        apt_packages: vec!["chromium".to_string()],
+        min_memory_mb: Some(BROWSER_MEMORY_MB),
+        ..Default::default()
+    })
+}
+
+fn detect_ffmpeg_node(p: &ProjectStructure) -> Option<Provision> {
+    // fluent-ffmpeg shells out to a system ffmpeg binary.
+    deps_contain(&p.node_deps, &["fluent-ffmpeg"]).then(|| Provision {
+        apt_packages: vec!["ffmpeg".to_string()],
+        ..Default::default()
+    })
+}
+
+fn detect_opencv_python(p: &ProjectStructure) -> Option<Provision> {
+    deps_contain(&p.python_deps, &["opencv-python", "opencv-contrib-python"]).then(|| Provision {
+        apt_packages: vec!["libgl1".to_string(), "libglib2.0-0".to_string()],
+        ..Default::default()
+    })
+}
+
+/// Runtime shared libraries Chromium needs when not provided by a Playwright base image.
+fn chromium_runtime_libs() -> Vec<String> {
+    [
+        "ca-certificates", "fonts-liberation", "libasound2", "libatk-bridge2.0-0",
+        "libatk1.0-0", "libcups2", "libdbus-1-3", "libdrm2", "libgbm1", "libnspr4",
+        "libnss3", "libxcomposite1", "libxdamage1", "libxfixes3", "libxkbcommon0",
+        "libxrandr2", "libpango-1.0-0", "libcairo2",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// Run all detectors and merge their requirements.
+pub fn detect_provision(project: &ProjectStructure) -> Provision {
+    let mut merged = Provision::default();
+    for detect in DETECTORS {
+        if let Some(p) = detect(project) {
+            merged.merge(p);
+        }
+    }
+    merged
+}
+
+/// Inject a Provision into a Dockerfile (generated or user-supplied).
+///
+/// Returns `Some(new_dockerfile)` if anything was added, or `None` when there is
+/// nothing to do / nothing safe to do (caller then leaves the file untouched).
+///   - apt packages → a `RUN apt-get install …` right after the final `FROM`.
+///   - post_install → `RUN …` right before the final `CMD`/`ENTRYPOINT`.
+pub fn apply_provision(dockerfile: &str, provision: &Provision) -> Option<String> {
+    if provision.apt_packages.is_empty() && provision.post_install.is_empty() {
+        return None;
+    }
+
+    let lines: Vec<&str> = dockerfile.lines().collect();
+    let upper = |l: &str| l.trim_start().to_uppercase();
+
+    let last_from = lines.iter().rposition(|l| upper(l).starts_with("FROM "))?;
+    let last_cmd = lines.iter().rposition(|l| {
+        let u = upper(l);
+        u.starts_with("CMD") || u.starts_with("ENTRYPOINT")
+    });
+
+    // Only add apt packages not already mentioned anywhere in the Dockerfile.
+    let apt_needed: Vec<String> = provision
+        .apt_packages
+        .iter()
+        .filter(|pkg| !dockerfile.contains(pkg.as_str()))
+        .cloned()
+        .collect();
+    let apt_line = (!apt_needed.is_empty()).then(|| {
+        format!(
+            "RUN apt-get update && apt-get install -y --no-install-recommends {} && rm -rf /var/lib/apt/lists/*",
+            apt_needed.join(" ")
+        )
+    });
+
+    // Skip post_install entirely if the project already provisions it.
+    let already_provisions = provision
+        .skip_if_contains
+        .iter()
+        .any(|m| dockerfile.contains(m.as_str()));
+    let post_install: Vec<String> = if already_provisions {
+        Vec::new()
+    } else {
+        provision.post_install.clone()
+    };
+
+    if apt_line.is_none() && post_install.is_empty() {
+        return None;
+    }
+
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 6);
+    for (i, line) in lines.iter().enumerate() {
+        // post_install goes just before the final CMD/ENTRYPOINT (deps exist by now).
+        if Some(i) == last_cmd && !post_install.is_empty() {
+            out.push("# nodeflare: provision system dependency (matches installed library version)".to_string());
+            for cmd in &post_install {
+                out.push(format!("RUN {}", cmd));
+            }
+        }
+        out.push((*line).to_string());
+        // apt packages go right after the final FROM (the runtime stage).
+        if i == last_from {
+            if let Some(ref a) = apt_line {
+                out.push("# nodeflare: system packages".to_string());
+                out.push(a.clone());
+            }
+        }
+    }
+    // No CMD/ENTRYPOINT found: append post_install as trailing build steps.
+    if last_cmd.is_none() && !post_install.is_empty() {
+        out.push("# nodeflare: provision system dependency".to_string());
+        for cmd in &post_install {
+            out.push(format!("RUN {}", cmd));
+        }
+    }
+
+    Some(format!("{}\n", out.join("\n")))
+}
+
 fn generate_dockerfile(
     runtime: &str,
     transport: &str,
@@ -977,20 +1357,36 @@ pub async fn build_and_deploy(
 
     on_log(&format!("Preparing deployment for app: {}", app_name));
 
-    // Write fly.toml
-    let fly_toml_path = source_dir.join("fly.toml");
-    let fly_toml_content = generate_fly_toml(&app_name, &job.region, &job.runtime, &job.transport);
-    tokio::fs::write(&fly_toml_path, &fly_toml_content)
-        .await
-        .context("Failed to write fly.toml")?;
-    on_log("Generated fly.toml");
-
     // Detect project structure for smarter Dockerfile generation
     let project = detect_project_structure(source_dir).await;
     on_log(&format!(
         "Detected project structure: pyproject={}, uv={}, requirements={}, python_entry={:?}",
         project.has_pyproject, project.has_uv_lock, project.has_requirements_txt, project.python_entry
     ));
+
+    // System-dependency provisioning (headless browsers, ffmpeg, native libs…).
+    // Empty when nothing is detected — in that case every downstream step behaves
+    // exactly as before (no Dockerfile change, default memory).
+    let provision = detect_provision(&project);
+    if !provision.is_empty() {
+        on_log(&format!(
+            "Detected system dependencies: apt={:?}, post_install={:?}, min_memory={:?}MB",
+            provision.apt_packages, provision.post_install, provision.min_memory_mb
+        ));
+        for w in &provision.warnings {
+            on_log(&format!("⚠️  {}", w));
+        }
+    }
+
+    // Write fly.toml (bump memory when a heavy dependency needs it; default 256MB).
+    let fly_toml_path = source_dir.join("fly.toml");
+    let memory_mb = provision.min_memory_mb.unwrap_or(256);
+    let fly_toml_content =
+        generate_fly_toml(&app_name, &job.region, &job.runtime, &job.transport, memory_mb);
+    tokio::fs::write(&fly_toml_path, &fly_toml_content)
+        .await
+        .context("Failed to write fly.toml")?;
+    on_log("Generated fly.toml");
 
     // For STDIO transport, copy the adapter script to source directory
     if job.transport == "stdio" {
@@ -1071,6 +1467,9 @@ pub async fn build_and_deploy(
             job.build_command.as_deref(),
             &project,
         );
+        // Inject system-dependency provisioning (no-op when nothing was detected).
+        let dockerfile_content =
+            apply_provision(&dockerfile_content, &provision).unwrap_or(dockerfile_content);
         tokio::fs::write(&dockerfile_path, &dockerfile_content)
             .await
             .context("Failed to write Dockerfile")?;
@@ -1078,6 +1477,19 @@ pub async fn build_and_deploy(
             "Generated Dockerfile for {} runtime (transport: {})",
             job.runtime, job.transport
         ));
+    } else if !provision.is_empty() {
+        // User-supplied Dockerfile is otherwise used as-is. When the project needs a
+        // system dependency (e.g. a Playwright browser whose version must match the
+        // installed package), patch it in before the final CMD without the user having
+        // to change their repo. No change is written if nothing safe could be injected.
+        if let Some(ref existing) = existing_dockerfile {
+            if let Some(patched) = apply_provision(existing, &provision) {
+                tokio::fs::write(&dockerfile_path, &patched)
+                    .await
+                    .context("Failed to write patched Dockerfile")?;
+                on_log("Injected system-dependency provisioning into existing Dockerfile");
+            }
+        }
     }
 
     // Create app if it doesn't exist
@@ -1377,5 +1789,92 @@ mod tests {
         assert!(!out.contains("server.js"));
         assert!(out.contains("RUN echo after"));
         assert!(!out.trim_end().ends_with('\\'));
+    }
+
+    // ---- System-dependency provisioning ----
+
+    #[test]
+    fn provision_detects_playwright_node() {
+        let project = ProjectStructure {
+            node_deps: vec!["playwright".to_string(), "express".to_string()],
+            ..Default::default()
+        };
+        let p = detect_provision(&project);
+        assert!(!p.is_empty());
+        assert_eq!(p.min_memory_mb, Some(2048));
+        assert!(p
+            .post_install
+            .iter()
+            .any(|c| c.contains("playwright install")));
+    }
+
+    #[test]
+    fn provision_empty_for_plain_api_server() {
+        // No browser / native deps → nothing provisioned → builds unchanged.
+        let project = ProjectStructure {
+            node_deps: vec!["express".to_string(), "axios".to_string()],
+            ..Default::default()
+        };
+        assert!(detect_provision(&project).is_empty());
+    }
+
+    #[test]
+    fn apply_provision_noop_when_empty() {
+        let df = "FROM node:20-slim\nCMD [\"node\", \"index.js\"]\n";
+        assert_eq!(apply_provision(df, &Provision::default()), None);
+    }
+
+    #[test]
+    fn apply_provision_inserts_post_install_before_cmd() {
+        let project = ProjectStructure {
+            node_deps: vec!["playwright".to_string()],
+            ..Default::default()
+        };
+        let p = detect_provision(&project);
+        let df = "FROM node:20-slim\nWORKDIR /app\nCOPY . .\nRUN npm ci\nCMD [\"node\", \"index.js\"]\n";
+        let out = apply_provision(df, &p).expect("should inject");
+        assert!(out.contains("RUN npx playwright install --with-deps chromium"));
+        let run_at = out.find("playwright install").unwrap();
+        let cmd_at = out.find("CMD").unwrap();
+        assert!(run_at < cmd_at, "install must come before CMD");
+    }
+
+    #[test]
+    fn apply_provision_idempotent_when_already_provisioned() {
+        let project = ProjectStructure {
+            node_deps: vec!["playwright".to_string()],
+            ..Default::default()
+        };
+        let p = detect_provision(&project);
+        // Dockerfile already runs the installer → nothing to add → no change.
+        let df = "FROM node:20-slim\nRUN npm ci\nRUN npx playwright install --with-deps chromium\nCMD [\"node\", \"index.js\"]\n";
+        assert_eq!(apply_provision(df, &p), None);
+    }
+
+    #[test]
+    fn apply_provision_patches_existing_user_dockerfile() {
+        // The note-server case: own Dockerfile, no explicit browser install.
+        let project = ProjectStructure {
+            node_deps: vec!["playwright".to_string()],
+            ..Default::default()
+        };
+        let p = detect_provision(&project);
+        let df = "FROM mcr.microsoft.com/playwright:v1.40.0-jammy\nWORKDIR /app\nCOPY . .\nRUN npm ci && npm run build\nEXPOSE 3000\nCMD [\"npm\", \"run\", \"start:http\"]\n";
+        let out = apply_provision(df, &p).expect("should patch");
+        assert!(out.contains("RUN npx playwright install --with-deps chromium"));
+        assert!(out.find("playwright install").unwrap() < out.find("CMD").unwrap());
+    }
+
+    #[test]
+    fn apply_provision_adds_apt_after_final_from() {
+        let project = ProjectStructure {
+            python_deps: vec!["selenium".to_string()],
+            ..Default::default()
+        };
+        let p = detect_provision(&project);
+        let df = "FROM python:3.11-slim\nWORKDIR /app\nCOPY . .\nRUN pip install -r requirements.txt\nCMD [\"python\", \"main.py\"]\n";
+        let out = apply_provision(df, &p).expect("should inject apt");
+        assert!(out.contains("apt-get install"));
+        assert!(out.contains("chromium"));
     }
 }
