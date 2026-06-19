@@ -9,7 +9,6 @@ interface BlogPost {
   slug: string;
   excerpt?: string;
   publishDate?: string;
-  author?: { name: string };
   categories: { id: string; name: string }[];
 }
 
@@ -69,7 +68,6 @@ async function fetchBlogPosts(locales: string[]): Promise<BlogPost[]> {
               slug
               excerpt
               publishDate
-              author { id name }
               categories { id name slug }
             }
           }
@@ -123,9 +121,6 @@ export default async function BlogPage() {
               <h2 className="text-base font-bold text-gray-900 group-hover:text-violet-600 transition-colors line-clamp-2">
                 {post.title}
               </h2>
-              {post.author && (
-                <p className="text-xs text-gray-400 mt-1">{post.author.name}</p>
-              )}
             </Link>
           ))}
         </div>

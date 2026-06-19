@@ -25,12 +25,6 @@ const SANITIZE_CONFIG: sanitizeHtmlLib.IOptions = {
   disallowedTagsMode: 'discard',
 };
 
-export interface Author {
-  id: string;
-  name: string;
-  bio?: string;
-}
-
 export interface Category {
   id: string;
   name: string;
@@ -47,7 +41,6 @@ export interface BlogPost {
     text: string;
   };
   publishDate?: string;
-  author?: Author;
   categories: Category[];
 }
 
@@ -178,10 +171,6 @@ export async function getBlogPosts(locale: string = 'en'): Promise<BlogPost[]> {
         slug
         excerpt
         publishDate
-        author {
-          id
-          name
-        }
         categories {
           id
           name
@@ -210,11 +199,6 @@ export async function getBlogPost(slug: string, locale: string = 'en'): Promise<
           text
         }
         publishDate
-        author {
-          id
-          name
-          bio
-        }
         categories {
           id
           name

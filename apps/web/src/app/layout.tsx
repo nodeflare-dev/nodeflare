@@ -26,13 +26,13 @@ export const metadata: Metadata = {
     siteName: 'Nodeflare',
     title: 'Nodeflare - Deploy MCP Servers in Seconds',
     description: 'Deploy and manage MCP servers with zero configuration. TypeScript & Python support, built-in secrets management, and global edge deployment.',
-    images: [{ url: '/top.png', width: 1200, height: 630, alt: 'Nodeflare' }],
+    images: [{ url: '/nodeflare_perfect_visual.png', width: 2560, height: 1440, alt: 'Nodeflare' }],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'Nodeflare - Deploy MCP Servers in Seconds',
     description: 'Deploy and manage MCP servers with zero configuration.',
-    images: ['/top.png'],
+    images: ['/nodeflare_perfect_visual.png'],
   },
   robots: {
     index: true,
