@@ -20,6 +20,7 @@ use tokio::net::TcpListener;
 use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod affinity;
 mod auth;
 mod cache;
 mod rate_limit;
@@ -600,7 +601,7 @@ async fn forward_request(
     credential: &AuthCredential,
 ) -> Result<(Response, McpRequestInfo), ProxyError> {
     let method = request.method().clone();
-    let headers = request.headers().clone();
+    let mut headers = request.headers().clone();
     let is_sse = is_sse_request(&headers);
 
     // Read body
@@ -625,10 +626,25 @@ async fn forward_request(
     // Check scope permission before forwarding
     check_scope_permission(credential, &mcp_info)?;
 
+    // Session affinity: pin a stateful session to the Fly Machine that owns it.
+    let is_initialize = mcp_info.method_str.as_deref() == Some("initialize");
+    let affinity = affinity::decide(state, target_url, &headers, is_initialize).await;
+    if let Some(machine) = affinity.forced_machine.as_deref() {
+        if let Ok(value) = HeaderValue::from_str(machine) {
+            headers.insert("fly-force-instance-id", value);
+            tracing::info!("affinity: forcing instance {}", machine);
+        }
+    }
+
     // SSE requests: use streaming (no buffering, minimal latency)
     if is_sse {
         tracing::info!("SSE request detected, using streaming forward to {}", target_url);
         let response = execute_streaming_request(state, target_url, method, &headers, body_bytes).await?;
+        let session_id = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok());
+        affinity::capture_session(state, &affinity, session_id).await;
         return Ok((response, mcp_info));
     }
 
@@ -678,6 +694,12 @@ async fn forward_request(
     let (response_body, status, response_headers) =
         execute_upstream_request(state, target_url, method, &headers, body_bytes).await?;
 
+    let session_id = response_headers
+        .iter()
+        .find(|(k, _)| k == "mcp-session-id")
+        .map(|(_, v)| v.as_str());
+    affinity::capture_session(state, &affinity, session_id).await;
+
     let response = build_response(status, &response_headers, response_body)?;
     Ok((response, mcp_info))
 }
@@ -690,7 +712,7 @@ async fn forward_request_no_auth(
     request: Request<Body>,
 ) -> Result<(Response, McpRequestInfo), ProxyError> {
     let method = request.method().clone();
-    let headers = request.headers().clone();
+    let mut headers = request.headers().clone();
     let is_sse = is_sse_request(&headers);
 
     // Read body
@@ -714,10 +736,25 @@ async fn forward_request_no_auth(
 
     // Skip scope permission check - auth is handled by the MCP server itself
 
+    // Session affinity: pin a stateful session to the Fly Machine that owns it.
+    let is_initialize = mcp_info.method_str.as_deref() == Some("initialize");
+    let affinity = affinity::decide(state, target_url, &headers, is_initialize).await;
+    if let Some(machine) = affinity.forced_machine.as_deref() {
+        if let Ok(value) = HeaderValue::from_str(machine) {
+            headers.insert("fly-force-instance-id", value);
+            tracing::info!("affinity: forcing instance {}", machine);
+        }
+    }
+
     // SSE requests: use streaming (no buffering, minimal latency)
     if is_sse {
         tracing::info!("SSE request detected, using streaming forward to {}", target_url);
         let response = execute_streaming_request(state, target_url, method, &headers, body_bytes).await?;
+        let session_id = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok());
+        affinity::capture_session(state, &affinity, session_id).await;
         return Ok((response, mcp_info));
     }
 
@@ -766,6 +803,12 @@ async fn forward_request_no_auth(
     // Non-cacheable requests: execute directly
     let (response_body, status, response_headers) =
         execute_upstream_request(state, target_url, method, &headers, body_bytes).await?;
+
+    let session_id = response_headers
+        .iter()
+        .find(|(k, _)| k == "mcp-session-id")
+        .map(|(_, v)| v.as_str());
+    affinity::capture_session(state, &affinity, session_id).await;
 
     let response = build_response(status, &response_headers, response_body)?;
     Ok((response, mcp_info))
