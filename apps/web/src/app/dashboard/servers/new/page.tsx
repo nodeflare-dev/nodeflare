@@ -91,12 +91,27 @@ export default function NewServerPage() {
       .substring(0, 63);
   }, []);
 
-  // Parse GitHub URL to extract owner/repo
-  const parseGitHubUrl = useCallback((input: string): { owner: string; repo: string } | null => {
-    // Handle full URLs like https://github.com/owner/repo
-    const urlMatch = input.match(/github\.com\/([^\/]+)\/([^\/\s#?]+)/);
+  // Parse GitHub URL to extract owner/repo and, when present, the branch and
+  // subdirectory from a `/tree/<branch>/<path>` or `/blob/<branch>/<path>` URL.
+  // Note: branch is taken as the first segment after tree/blob, so slashed branch
+  // names (e.g. `feature/x`) get split into the path — rare, and user-overridable.
+  const parseGitHubUrl = useCallback((input: string): {
+    owner: string;
+    repo: string;
+    branch?: string;
+    subdir?: string;
+  } | null => {
+    // Full URLs, optionally pointing at a branch + path inside the repo.
+    const urlMatch = input.match(
+      /github\.com\/([^\/\s#?]+)\/([^\/\s#?]+)(?:\/(?:tree|blob)\/([^\/\s#?]+)(?:\/([^\s#?]+))?)?/
+    );
     if (urlMatch) {
-      return { owner: urlMatch[1], repo: urlMatch[2].replace(/\.git$/, '') };
+      return {
+        owner: urlMatch[1],
+        repo: urlMatch[2].replace(/\.git$/, ''),
+        branch: urlMatch[3] || undefined,
+        subdir: urlMatch[4]?.replace(/\/+$/, '') || undefined,
+      };
     }
     // Handle owner/repo format
     const shortMatch = input.match(/^([^\/\s]+)\/([^\/\s]+)$/);
@@ -118,14 +133,22 @@ export default function NewServerPage() {
 
     const parsed = parseGitHubUrl(value);
     if (parsed) {
-      const slug = generateSlug(parsed.repo);
+      // Name/slug from the subdir when the URL targets one (e.g. a monorepo
+      // member like `src/filesystem`), otherwise from the repo.
+      const leaf = parsed.subdir ? parsed.subdir.split('/').pop()! : parsed.repo;
+      const slug = generateSlug(leaf);
       setFormData(prev => ({
         ...prev,
         github_repo: `${parsed.owner}/${parsed.repo}`,
-        name: parsed.repo,
+        name: leaf,
         slug: slug,
-        github_branch: 'main',
+        github_branch: parsed.branch || 'main',
+        root_directory: parsed.subdir || '',
       }));
+      // Surface the auto-filled root directory so the user can see/confirm it.
+      if (parsed.subdir) {
+        setShowAdvanced(true);
+      }
     } else {
       setPublicRepoError('Invalid format. Use owner/repo or full GitHub URL');
       setFormData(prev => ({ ...prev, github_repo: '', name: '', slug: '' }));
