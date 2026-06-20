@@ -396,7 +396,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_build_job(job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Result<(), Error> {
+async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Result<(), Error> {
     tracing::info!("Processing build job: {:?}", job.deployment_id);
 
     // Update deployment status to building
@@ -550,6 +550,39 @@ async fn handle_build_job(job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Resu
         canonical_subdir
     };
 
+    // Strategy 3: a member of an npm/yarn workspaces monorepo cannot be built from
+    // its own subdirectory — its tsconfig typically extends the repo root and its
+    // dependencies are hoisted to the root node_modules. When the target is such a
+    // member and the user did not pin an entry command, build from the repo ROOT and
+    // point the entry at the member's output (e.g. `node src/filesystem/dist/index.js`),
+    // detected from the member's own manifest. Otherwise keep the subdirectory context.
+    let mut build_context = actual_source_dir.clone();
+    if !job.root_directory.is_empty()
+        && job.root_directory != "."
+        && job.root_directory != "/"
+        && job.entry_command.is_none()
+    {
+        let clean_root_dir = job.root_directory.trim_start_matches('/').to_string();
+        let workspaces = flyctl::detect_workspace_globs(source_dir);
+        if flyctl::subdir_is_workspace_member(&clean_root_dir, &workspaces) {
+            let member = flyctl::detect_project_structure(&actual_source_dir).await;
+            if let Some(entry) = member.detected_entry(&job.runtime) {
+                let prefixed = flyctl::prefix_entry_with_subdir(&entry, &clean_root_dir);
+                log_to_db_and_ws(
+                    &ctx,
+                    job.deployment_id,
+                    format!(
+                        "Workspace monorepo member detected — building from repo root with entry `{}`",
+                        prefixed
+                    ),
+                )
+                .await;
+                job.entry_command = Some(prefixed);
+                build_context = source_dir.to_path_buf();
+            }
+        }
+    }
+
     // Get secrets for this server and decrypt them
     let encrypted_secrets = SecretRepository::list_by_server(&ctx.db, job.server_id)
         .await
@@ -610,11 +643,38 @@ async fn handle_build_job(job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Resu
     let build_result = flyctl::build_and_deploy(
         &ctx.config,
         &job,
-        &actual_source_dir,
+        &build_context,
         &secrets,
-        on_log,
+        on_log.clone(),
     )
     .await;
+
+    // Judgment D: a built image and a started machine don't prove the MCP server
+    // runs — a wrong entry path leaves the adapter listening while the child process
+    // crash-loops, so the deploy looks successful but every request 500s. Probe a
+    // real MCP initialize and demote a proven-broken server to a failure so it goes
+    // through normal failure reporting instead of being shown as "succeeded".
+    let build_result = match build_result {
+        Ok(deploy_result) => {
+            match flyctl::verify_mcp_initialize(&deploy_result.endpoint_url, &job.mcp_path, &on_log).await {
+                flyctl::ProbeOutcome::Verified => Ok(deploy_result),
+                flyctl::ProbeOutcome::Inconclusive(detail) => {
+                    on_log(&format!(
+                        "Warning: could not verify the MCP server responded; leaving as deployed. ({})",
+                        detail
+                    ));
+                    Ok(deploy_result)
+                }
+                flyctl::ProbeOutcome::Broken(detail) => Err(anyhow::anyhow!(
+                    "Deployment reached Fly.io but the MCP server did not start ({}). \
+                    This is usually a wrong startup command or missing build output — \
+                    check the server logs.",
+                    detail
+                )),
+            }
+        }
+        Err(e) => Err(e),
+    };
 
     match build_result {
         Ok(deploy_result) => {

@@ -124,6 +124,461 @@ fn parse_docker_command(s: &str) -> Option<String> {
     None
 }
 
+// ============================================================================
+// Dockerfile context-fit check (judgment B)
+//
+// A repo's own Dockerfile is only usable when built from a given context if all
+// of its COPY/ADD sources resolve inside that context. A Dockerfile written for
+// a monorepo root (e.g. `COPY src/filesystem /app`, `COPY tsconfig.json …`) cannot
+// build from the `src/filesystem` subdirectory — those paths aren't there. Adopting
+// it anyway breaks the build and pins a stale entry command. We detect that and
+// fall back to generating our own Dockerfile instead.
+//
+// Direction of the check: we only discard the repo Dockerfile on a *provable*
+// escape (a literal path that isn't present, or a `..` traversal). Anything we
+// can't resolve statically (unresolved ${VARS}, remote URLs, globs) is left to the
+// author — a false "usable" is caught loudly by the build / the post-deploy probe,
+// whereas a false "unusable" would silently replace a working build.
+// ============================================================================
+
+/// A build-context-relative source path referenced by a COPY/ADD instruction.
+#[derive(Debug, Clone, PartialEq)]
+struct ContextSource {
+    /// The source path as written (may contain globs), e.g. "src/filesystem".
+    raw: String,
+    /// The full logical instruction, for diagnostics, e.g. "COPY src/filesystem /app".
+    instruction: String,
+}
+
+#[derive(Debug, PartialEq)]
+enum EscapeReason {
+    /// The path does not exist inside the build context.
+    NotFound,
+    /// The path reaches outside the context via `..`.
+    ParentTraversal,
+}
+
+struct EscapingSource {
+    instruction: String,
+    source: String,
+    #[allow(dead_code)]
+    reason: EscapeReason,
+}
+
+enum DockerfileContextFit {
+    Usable,
+    Unusable { escaping: Vec<EscapingSource> },
+}
+
+/// Join physical Dockerfile lines into logical instructions, honoring `\` line
+/// continuations and dropping full-line comments / blank lines. A `#` only starts
+/// a comment when it is not in the middle of a continued instruction.
+fn logical_instructions(dockerfile: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for raw_line in dockerfile.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        let trimmed = line.trim();
+        if current.is_empty() && (trimmed.is_empty() || trimmed.starts_with('#')) {
+            continue;
+        }
+        let continues = line.trim_end().ends_with('\\');
+        let segment = if continues {
+            let s = line.trim_end();
+            s[..s.len() - 1].trim()
+        } else {
+            trimmed
+        };
+        if current.is_empty() {
+            current.push_str(segment);
+        } else if !segment.is_empty() {
+            current.push(' ');
+            current.push_str(segment);
+        }
+        if !continues {
+            out.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// Split the text after a COPY/ADD keyword into (leading flags, operands).
+/// Handles shell form (`--flag a b dest`) and JSON exec form (`--flag ["a","dest"]`).
+fn split_copy_tokens(rest: &str) -> (Vec<String>, Vec<String>) {
+    let mut flags = Vec::new();
+    let mut remainder = rest.trim();
+    while let Some(stripped) = remainder.strip_prefix("--") {
+        let end = stripped.find(char::is_whitespace).unwrap_or(stripped.len());
+        flags.push(format!("--{}", &stripped[..end]));
+        remainder = stripped[end..].trim_start();
+    }
+    let operands = if remainder.starts_with('[') {
+        parse_json_string_array(remainder)
+    } else {
+        tokenize_shell(remainder)
+    };
+    (flags, operands)
+}
+
+/// Extract string elements from a JSON array literal: `["a", "b"]` -> [a, b].
+fn parse_json_string_array(s: &str) -> Vec<String> {
+    let s = s.trim();
+    if !(s.starts_with('[') && s.ends_with(']')) {
+        return Vec::new();
+    }
+    s[1..s.len() - 1]
+        .split(',')
+        .map(|p| p.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Quote-aware whitespace tokenizer for the shell form of COPY/ADD.
+fn tokenize_shell(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut in_token = false;
+    for c in s.chars() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else {
+                    cur.push(c);
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                    in_token = true;
+                } else if c.is_whitespace() {
+                    if in_token {
+                        tokens.push(std::mem::take(&mut cur));
+                        in_token = false;
+                    }
+                } else {
+                    cur.push(c);
+                    in_token = true;
+                }
+            }
+        }
+    }
+    if in_token {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+fn has_glob(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
+}
+
+/// True for ADD sources that come from the network / a git ref, not the context.
+fn is_remote_source(src: &str) -> bool {
+    let s = src.to_lowercase();
+    s.starts_with("http://")
+        || s.starts_with("https://")
+        || s.starts_with("ftp://")
+        || s.starts_with("git@")
+        || s.starts_with("git://")
+        || (s.contains("github.com/") && s.contains('#'))
+}
+
+/// True if the path contains an unresolved build variable (`$VAR`/`${VAR}`),
+/// treating `$$` as an escaped literal dollar.
+fn contains_unresolved_var(src: &str) -> bool {
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            if bytes.get(i + 1) == Some(&b'$') {
+                i += 2;
+                continue;
+            }
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Collect every build-context-relative COPY/ADD source in a Dockerfile.
+/// Excludes `--from=<stage>` copies, remote ADD URLs, heredocs and `$VAR` paths.
+fn parse_context_sources(dockerfile: &str) -> Vec<ContextSource> {
+    let mut sources = Vec::new();
+    for instr in logical_instructions(dockerfile) {
+        let mut it = instr.splitn(2, char::is_whitespace);
+        let keyword = it.next().unwrap_or("").to_uppercase();
+        if keyword != "COPY" && keyword != "ADD" {
+            continue;
+        }
+        let rest = it.next().unwrap_or("").trim();
+        let (flags, operands) = split_copy_tokens(rest);
+        // `--from=` -> source is a build stage / external image, not the context.
+        if flags.iter().any(|f| f == "--from" || f.starts_with("--from=")) {
+            continue;
+        }
+        // Need at least one source plus a destination to interpret reliably.
+        if operands.len() < 2 {
+            continue;
+        }
+        let is_add = keyword == "ADD";
+        for src in &operands[..operands.len() - 1] {
+            if src.starts_with("<<") {
+                continue; // heredoc inline content
+            }
+            if is_add && is_remote_source(src) {
+                continue;
+            }
+            if contains_unresolved_var(src) {
+                continue;
+            }
+            sources.push(ContextSource {
+                raw: src.clone(),
+                instruction: instr.clone(),
+            });
+        }
+    }
+    sources
+}
+
+/// Longest leading path with no glob metacharacter (drops the globbed segment on).
+fn glob_static_prefix(norm: &str) -> String {
+    let mut parts = Vec::new();
+    for seg in norm.split('/') {
+        if has_glob(seg) {
+            break;
+        }
+        parts.push(seg);
+    }
+    parts.join("/")
+}
+
+/// Decide whether a single context source escapes `context_dir`.
+fn source_escapes(
+    raw: &str,
+    context_dir: &Path,
+    canonical_ctx: Option<&Path>,
+) -> Option<EscapeReason> {
+    let norm = raw.trim_start_matches('/').replace('\\', "/");
+    if norm.is_empty() || norm == "." || norm == "./" {
+        return None; // whole context
+    }
+    if norm.split('/').any(|seg| seg == "..") {
+        return Some(EscapeReason::ParentTraversal);
+    }
+    let check_path = if has_glob(&norm) {
+        glob_static_prefix(&norm)
+    } else {
+        norm.clone()
+    };
+    if check_path.is_empty() {
+        return None; // glob whose parent is the context root
+    }
+    let full = context_dir.join(&check_path);
+    if !full.exists() {
+        return Some(EscapeReason::NotFound);
+    }
+    // Symlink safety: a link pointing outside the context is not "inside" it.
+    if let (Ok(canon), Some(ctx)) = (full.canonicalize(), canonical_ctx) {
+        if !canon.starts_with(ctx) {
+            return Some(EscapeReason::NotFound);
+        }
+    }
+    None
+}
+
+/// Judgment B: is the repo's Dockerfile buildable from `context_dir`?
+fn dockerfile_context_fit(dockerfile: &str, context_dir: &Path) -> DockerfileContextFit {
+    let canonical_ctx = context_dir.canonicalize().ok();
+    let mut escaping = Vec::new();
+    for cs in parse_context_sources(dockerfile) {
+        if let Some(reason) = source_escapes(&cs.raw, context_dir, canonical_ctx.as_deref()) {
+            escaping.push(EscapingSource {
+                instruction: cs.instruction,
+                source: cs.raw,
+                reason,
+            });
+        }
+    }
+    if escaping.is_empty() {
+        DockerfileContextFit::Usable
+    } else {
+        DockerfileContextFit::Unusable { escaping }
+    }
+}
+
+/// Workspace member globs declared in a package.json (npm/yarn workspaces).
+/// Handles both the array form and the `{ "packages": [...] }` object form.
+/// Empty when the field is absent.
+pub(crate) fn parse_workspaces(package_json: &str) -> Vec<String> {
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(package_json) else {
+        return Vec::new();
+    };
+    match pkg.get("workspaces") {
+        Some(serde_json::Value::Array(a)) => {
+            a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+        }
+        Some(serde_json::Value::Object(o)) => o
+            .get("packages")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Extract package globs from a pnpm-workspace.yaml `packages:` list. Minimal and
+/// line-based (avoids pulling in a YAML dependency): collects `- <glob>` items under
+/// the `packages:` key (block form) or `packages: [...]` (inline flow form), strips
+/// quotes, and skips negation (`!`) exclusion patterns.
+pub(crate) fn parse_pnpm_workspace(yaml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_packages = false;
+    for raw in yaml.lines() {
+        let line = raw.trim_end_matches('\r');
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indented = line.starts_with([' ', '\t']);
+        if !indented {
+            // A new top-level key ends any previous block; check if it's `packages:`.
+            in_packages = false;
+            if let Some(rest) = trimmed.strip_prefix("packages:") {
+                let rest = rest.trim();
+                if rest.starts_with('[') {
+                    out.extend(parse_inline_glob_array(rest));
+                } else {
+                    in_packages = true;
+                }
+            }
+            continue;
+        }
+        if in_packages {
+            if let Some(item) = trimmed.strip_prefix('-') {
+                let g = item.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !g.is_empty() && !g.starts_with('!') {
+                    out.push(g);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn parse_inline_glob_array(s: &str) -> Vec<String> {
+    s.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|p| p.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|g| !g.is_empty() && !g.starts_with('!'))
+        .collect()
+}
+
+/// Detect workspace member globs for a repo directory across npm/yarn
+/// (package.json `workspaces`) and pnpm (pnpm-workspace.yaml). Empty when the repo
+/// is not a workspaces monorepo.
+pub(crate) fn detect_workspace_globs(dir: &Path) -> Vec<String> {
+    let mut globs = Vec::new();
+    if let Ok(pkg) = std::fs::read_to_string(dir.join("package.json")) {
+        globs.extend(parse_workspaces(&pkg));
+    }
+    if let Ok(y) = std::fs::read_to_string(dir.join("pnpm-workspace.yaml"))
+        .or_else(|_| std::fs::read_to_string(dir.join("pnpm-workspace.yml")))
+    {
+        globs.extend(parse_pnpm_workspace(&y));
+    }
+    globs.sort();
+    globs.dedup();
+    globs
+}
+
+/// Expand `prefix/*` and `prefix/**` workspace globs into the actual subdirectories
+/// present, for guiding the user toward a concrete target. Literal members pass through.
+fn list_workspace_members(root: &Path, globs: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for g in globs {
+        if let Some(prefix) = g.strip_suffix("/**").or_else(|| g.strip_suffix("/*")) {
+            if let Ok(rd) = std::fs::read_dir(root.join(prefix)) {
+                for entry in rd.flatten() {
+                    if entry.path().is_dir() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            out.push(format!("{}/{}", prefix, name));
+                        }
+                    }
+                }
+            }
+        } else if !has_glob(g) {
+            out.push(g.clone());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Whether `subdir` (repo-relative, e.g. "src/filesystem") is matched by one of the
+/// workspace globs. Supports `prefix/**` (any depth), `prefix/*` (direct child),
+/// `*` and literal forms.
+pub(crate) fn subdir_is_workspace_member(subdir: &str, globs: &[String]) -> bool {
+    let subdir = subdir.trim_matches('/');
+    globs.iter().any(|g| {
+        let g = g.trim_matches('/');
+        if let Some(prefix) = g.strip_suffix("/**") {
+            let prefix = prefix.trim_matches('/');
+            prefix.is_empty()
+                || (subdir.len() > prefix.len()
+                    && subdir.starts_with(prefix)
+                    && subdir.as_bytes().get(prefix.len()) == Some(&b'/'))
+        } else if let Some(prefix) = g.strip_suffix("/*") {
+            let prefix = prefix.trim_matches('/');
+            match subdir.strip_prefix(prefix) {
+                Some(rest) => {
+                    let rest = rest.trim_start_matches('/');
+                    !rest.is_empty() && !rest.contains('/')
+                }
+                None => false,
+            }
+        } else if g == "*" {
+            !subdir.is_empty() && !subdir.contains('/')
+        } else {
+            g == subdir
+        }
+    })
+}
+
+/// Rewrite an entry command so it works when the build context is the repo ROOT but
+/// the server lives in `subdir`. Handles `node <script> [args]` (the dominant TS-MCP
+/// shape) by prefixing the script path, and `npm <...>` via `--prefix`. Any other
+/// shape is returned unchanged (we can't safely rewrite it).
+pub(crate) fn prefix_entry_with_subdir(entry: &str, subdir: &str) -> String {
+    let subdir = subdir.trim_matches('/');
+    if subdir.is_empty() {
+        return entry.to_string();
+    }
+    let parts: Vec<&str> = entry.split_whitespace().collect();
+    match parts.as_slice() {
+        ["node", script, rest @ ..] if !script.starts_with('/') && !script.starts_with('-') => {
+            let mut out = format!("node {}/{}", subdir, script);
+            for r in rest {
+                out.push(' ');
+                out.push_str(r);
+            }
+            out
+        }
+        ["npm", rest @ ..] if !rest.is_empty() => {
+            format!("npm --prefix {} {}", subdir, rest.join(" "))
+        }
+        _ => entry.to_string(),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct MachineInfo {
     id: String,
@@ -180,6 +635,26 @@ primary_region = "{region}"
     )
 }
 
+/// Node package manager a project uses, which drives the install/build commands.
+/// Only npm and pnpm are distinguished; yarn projects install fine via npm and are
+/// left as Npm to avoid changing their (working) behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) enum NodePm {
+    #[default]
+    Npm,
+    Pnpm,
+}
+
+impl NodePm {
+    /// The `run` prefix used to invoke package scripts (`npm run` / `pnpm run`).
+    fn runner(self) -> &'static str {
+        match self {
+            NodePm::Npm => "npm run",
+            NodePm::Pnpm => "pnpm run",
+        }
+    }
+}
+
 /// Project structure information detected from source directory
 #[derive(Debug, Default)]
 pub struct ProjectStructure {
@@ -209,6 +684,8 @@ pub struct ProjectStructure {
     pub python_deps: Vec<String>,
     /// Module paths from go.mod `require` entries.
     pub go_deps: Vec<String>,
+    /// Detected Node package manager (npm vs pnpm), driving install/build commands.
+    pub(crate) node_pm: NodePm,
 }
 
 impl ProjectStructure {
@@ -218,7 +695,7 @@ impl ProjectStructure {
     ///
     /// This is the source of "auto-detection": it lets stdio servers deploy without an
     /// explicit entry command, and lets SSE servers stop assuming `index.js`.
-    fn detected_entry(&self, runtime: &str) -> Option<String> {
+    pub(crate) fn detected_entry(&self, runtime: &str) -> Option<String> {
         match runtime {
             "node" => self.node_entry.clone(),
             "python" => self
@@ -242,6 +719,9 @@ pub async fn detect_project_structure(source_dir: &Path) -> ProjectStructure {
     structure.has_uv_lock = source_dir.join("uv.lock").exists();
     structure.has_requirements_txt = source_dir.join("requirements.txt").exists();
     structure.has_package_json = source_dir.join("package.json").exists();
+    if structure.has_package_json {
+        structure.node_pm = detect_node_pm(source_dir);
+    }
 
     // Detect Python entry point (in priority order)
     let python_entry_candidates = [
@@ -773,13 +1253,59 @@ fn generate_dockerfile(
     generate_stdio_dockerfile(runtime, mcp_path, existing_dockerfile, existing_entry_command, entry_command, build_command, project)
 }
 
+/// Detect the Node package manager from lockfiles, the pnpm workspace file, or the
+/// package.json `packageManager` field. Defaults to npm.
+fn detect_node_pm(dir: &Path) -> NodePm {
+    if dir.join("pnpm-lock.yaml").exists()
+        || dir.join("pnpm-workspace.yaml").exists()
+        || dir.join("pnpm-workspace.yml").exists()
+    {
+        return NodePm::Pnpm;
+    }
+    if let Ok(content) = std::fs::read_to_string(dir.join("package.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(pm) = v.get("packageManager").and_then(|p| p.as_str()) {
+                if pm.trim_start().starts_with("pnpm") {
+                    return NodePm::Pnpm;
+                }
+            }
+        }
+    }
+    NodePm::Npm
+}
+
 /// Build step for the Node image-build stage.
 /// If the user supplied a custom `build_command`, run exactly that; otherwise run the
-/// project's own `build` npm script when present (a no-op if the script is absent).
-fn node_build_step(build_command: Option<&str>) -> String {
+/// project's own `build` script when present (a no-op if the script is absent).
+fn node_build_step(build_command: Option<&str>, pm: NodePm) -> String {
     match build_command {
         Some(cmd) if !cmd.trim().is_empty() => format!("RUN {}", cmd.trim()),
-        _ => "RUN npm run build --if-present".to_string(),
+        _ => format!("RUN {} build --if-present", pm.runner()),
+    }
+}
+
+/// Dependency-install + source-copy + build section of the Node build stage.
+/// npm copies manifests first for layer caching, then the source; pnpm copies the
+/// whole context first because its lockfile, workspace file and member manifests are
+/// all needed before `pnpm install` (which matters for workspace monorepos).
+fn node_setup_section(pm: NodePm, build_command: Option<&str>) -> String {
+    let build = node_build_step(build_command, pm);
+    match pm {
+        NodePm::Pnpm => format!(
+            "COPY . .\n\
+             # Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.\n\
+             RUN corepack enable && (pnpm install --frozen-lockfile 2>/dev/null || pnpm install)\n\
+             # Run the project's own build script if it declares one (tsc/esbuild/etc.).\n\
+             {build}"
+        ),
+        NodePm::Npm => format!(
+            "COPY package*.json ./\n\
+             # Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.\n\
+             RUN npm ci 2>/dev/null || npm install\n\
+             COPY . .\n\
+             # Run the project's own build script if it declares one (tsc/esbuild/etc.).\n\
+             {build}"
+        ),
     }
 }
 
@@ -796,8 +1322,8 @@ fn optional_build_step(build_command: Option<&str>) -> String {
 fn generate_sse_dockerfile(runtime: &str, build_command: Option<&str>, project: &ProjectStructure) -> String {
     match runtime {
         "node" => {
-            // Custom build_command if set, else the project's own `build` script (no-op if absent).
-            let build_step = node_build_step(build_command);
+            // Install/copy/build, using the detected package manager (npm or pnpm).
+            let setup = node_setup_section(project.node_pm, build_command);
             // Auto-detected start command from package.json; fall back to the historical default.
             let node_cmd = project
                 .node_entry
@@ -807,13 +1333,7 @@ fn generate_sse_dockerfile(runtime: &str, build_command: Option<&str>, project: 
             format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package*.json ./
-# Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.
-RUN npm ci 2>/dev/null || npm install
-COPY . .
-# Run the project's own build script if it declares one (tsc/esbuild/etc.).
-# Output path is the project's concern; we don't hardcode it.
-{build_step}
+{setup}
 EXPOSE 3000
 CMD [{node_cmd}]
 "#)
@@ -998,18 +1518,12 @@ CMD ["node", "stdio-adapter.cjs", "npx", "{package}"{extra_args_str}]
                 r#""node", "index.js""#.to_string()
             };
 
-            // Custom build_command if set, else the project's own `build` script (no-op if absent).
-            let build_step = node_build_step(build_command);
+            // Install/copy/build, using the detected package manager (npm or pnpm).
+            let setup = node_setup_section(project.node_pm, build_command);
             format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package*.json ./
-# Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.
-RUN npm ci 2>/dev/null || npm install
-COPY . .
-# Run the project's own build script if it declares one (tsc/esbuild/etc.).
-# Output path is the project's concern; we don't hardcode it.
-{build_step}
+{setup}
 # STDIO adapter is already copied to source directory
 ENV PORT=3000
 ENV MCP_PATH="{mcp_path}"
@@ -1405,6 +1919,27 @@ pub async fn build_and_deploy(
         None
     };
 
+    // Judgment B: only adopt the repo's Dockerfile if it can actually build from THIS
+    // context. A Dockerfile written for a monorepo root (e.g. `COPY src/<pkg> /app`)
+    // references paths that don't exist when built from a subdirectory; adopting it
+    // would break the build and pin a stale entry command. Discard it — and, with it,
+    // any entry command we'd otherwise extract from it — and generate our own instead.
+    let existing_dockerfile = match existing_dockerfile {
+        Some(df) => match dockerfile_context_fit(&df, source_dir) {
+            DockerfileContextFit::Usable => Some(df),
+            DockerfileContextFit::Unusable { escaping } => {
+                for e in &escaping {
+                    on_log(&format!(
+                        "Ignoring repo Dockerfile: `{}` references `{}` which is not in the build context — generating a Dockerfile instead.",
+                        e.instruction, e.source
+                    ));
+                }
+                None
+            }
+        },
+        None => None,
+    };
+
     // For STDIO transport with existing Dockerfile, extract the entry command
     let existing_entry_command = if job.transport == "stdio" {
         if let Some(ref content) = existing_dockerfile {
@@ -1440,6 +1975,28 @@ pub async fn build_and_deploy(
         && existing_entry_command.is_none()
         && detected_entry.is_none()
     {
+        // A workspaces monorepo root has no runnable entry of its own — the build
+        // output lives under a specific member (e.g. src/filesystem/dist/index.js).
+        // Don't guess: tell the user which members exist and how to target one.
+        let workspaces = detect_workspace_globs(source_dir);
+        if !workspaces.is_empty() {
+            let members = list_workspace_members(source_dir, &workspaces);
+            let target_hint = if members.is_empty() {
+                workspaces.join(", ")
+            } else {
+                members.join(", ")
+            };
+            anyhow::bail!(
+                "This looks like a monorepo (package.json declares workspaces: {}). \
+                Nodeflare can't tell which server to run, so it won't guess. \
+                Set the Root Directory to the target package — one of: {} — \
+                and/or set the startup command (e.g. `node {}/dist/index.js`).",
+                workspaces.join(", "),
+                target_hint,
+                members.first().map(String::as_str).unwrap_or("<package>"),
+            );
+        }
+
         let example = match job.runtime.as_str() {
             "node" => "node index.js, npx @modelcontextprotocol/server-xxx",
             "python" => "python main.py, uv run mcp-server",
@@ -1618,6 +2175,123 @@ async fn get_machine_id(config: &AppConfig, app_name: &str) -> Result<String> {
         .next()
         .map(|m| format!("{}:{}", app_name, m.id))
         .ok_or_else(|| anyhow::anyhow!("No machines found"))
+}
+
+// ============================================================================
+// Post-deploy MCP verification (judgment D)
+//
+// A built image + a started machine does NOT mean the MCP server runs: a wrong
+// entry path leaves the stdio adapter listening (HTTP up) while the child process
+// crash-loops, so the deploy looks "successful" but every real request 500s. We
+// probe a real MCP `initialize` against the deployed endpoint and only trust the
+// deploy when the child actually answers.
+//
+// Direction: fail the deploy only on a *proven* failure (the adapter returns 5xx
+// across retries — i.e. the child is dead). Cold-start/network noise is reported as
+// Inconclusive and does NOT fail the deploy, to avoid false negatives.
+// ============================================================================
+
+pub(crate) enum ProbeOutcome {
+    /// The MCP server answered an initialize request.
+    Verified,
+    /// The server is reachable but failed (adapter 5xx) — the child isn't running.
+    Broken(String),
+    /// Couldn't get a definitive answer (timeouts/cold start) — don't fail on this.
+    Inconclusive(String),
+}
+
+/// Char-safe short preview of a response body for logs/errors.
+fn snippet(s: &str) -> String {
+    let s = s.trim();
+    let short: String = s.chars().take(200).collect();
+    if short.len() < s.len() {
+        format!("{}…", short)
+    } else {
+        short
+    }
+}
+
+/// True if `body` looks like a JSON-RPC reply (json, or an SSE `data:` line).
+fn looks_like_jsonrpc(body: &str) -> bool {
+    let json_part = body
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("data:").map(str::trim))
+        .unwrap_or_else(|| body.trim());
+    serde_json::from_str::<serde_json::Value>(json_part)
+        .map(|v| v.get("result").is_some() || v.get("error").is_some() || v.get("jsonrpc").is_some())
+        .unwrap_or(false)
+}
+
+/// Probe the deployed MCP server with a real `initialize` request (judgment D).
+pub(crate) async fn verify_mcp_initialize(
+    endpoint_url: &str,
+    mcp_path: &str,
+    on_log: &impl Fn(&str),
+) -> ProbeOutcome {
+    let path = if mcp_path.is_empty() { "/mcp" } else { mcp_path };
+    let url = format!(
+        "{}/{}",
+        endpoint_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "nodeflare-probe", "version": "1.0" }
+        }
+    });
+
+    const ATTEMPTS: usize = 8;
+    let mut saw_server_error = false;
+    let mut last_detail = String::from("no response");
+
+    for attempt in 1..=ATTEMPTS {
+        match client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                if status.is_success() && looks_like_jsonrpc(&text) {
+                    on_log(&format!("MCP server verified: initialize responded ({})", status));
+                    return ProbeOutcome::Verified;
+                }
+                if status.is_server_error() {
+                    saw_server_error = true;
+                }
+                last_detail = format!("HTTP {}: {}", status.as_u16(), snippet(&text));
+            }
+            Err(e) => {
+                last_detail = format!("request error: {}", e);
+            }
+        }
+        if attempt < ATTEMPTS {
+            on_log(&format!(
+                "Verifying MCP server… not ready yet (attempt {}/{}: {})",
+                attempt, ATTEMPTS, last_detail
+            ));
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    }
+
+    if saw_server_error {
+        ProbeOutcome::Broken(last_detail)
+    } else {
+        ProbeOutcome::Inconclusive(last_detail)
+    }
 }
 
 #[cfg(test)]
@@ -1876,5 +2550,241 @@ mod tests {
         let out = apply_provision(df, &p).expect("should inject apt");
         assert!(out.contains("apt-get install"));
         assert!(out.contains("chromium"));
+    }
+
+    // ---- judgment B: COPY/ADD context-source parsing (pure) ----
+
+    fn raws(df: &str) -> Vec<String> {
+        parse_context_sources(df).into_iter().map(|c| c.raw).collect()
+    }
+
+    #[test]
+    fn ctx_sources_literal_and_multi() {
+        assert_eq!(raws("COPY src/filesystem /app"), vec!["src/filesystem"]);
+        assert_eq!(raws("COPY a b /dst"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn ctx_sources_json_exec_form() {
+        assert_eq!(raws(r#"COPY ["x", "y"]"#), vec!["x"]);
+    }
+
+    #[test]
+    fn ctx_sources_flags_and_from_and_remote() {
+        assert_eq!(raws("COPY --chown=node:node app /app"), vec!["app"]);
+        assert!(raws("COPY --from=builder /a /b").is_empty());
+        assert!(raws("COPY --from=nginx:latest /a /b").is_empty());
+        assert!(raws("ADD https://h/x.tar /x").is_empty());
+        assert!(raws("ADD git@github.com:o/r.git#main /x").is_empty());
+    }
+
+    #[test]
+    fn ctx_sources_vars_heredoc_and_dot() {
+        assert!(raws("COPY ${SRC} /app").is_empty());
+        assert_eq!(raws("COPY $$literal /app"), vec!["$$literal"]);
+        assert_eq!(raws("COPY . ."), vec!["."]);
+    }
+
+    #[test]
+    fn ctx_sources_line_continuation_and_comments() {
+        let df = "# comment\nCOPY \\\n  a \\\n  b /dst\nRUN echo hi\n";
+        assert_eq!(raws(df), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn ctx_sources_ignores_non_copy() {
+        assert!(raws("RUN npm ci\nWORKDIR /app\nFROM node:20").is_empty());
+    }
+
+    #[test]
+    fn ctx_sources_glob_preserved() {
+        assert_eq!(raws("COPY package*.json ./"), vec!["package*.json"]);
+    }
+
+    #[test]
+    fn parse_workspaces_array_and_object() {
+        assert_eq!(parse_workspaces(r#"{"workspaces":["src/*"]}"#), vec!["src/*"]);
+        assert_eq!(
+            parse_workspaces(r#"{"workspaces":{"packages":["a","b/*"]}}"#),
+            vec!["a", "b/*"]
+        );
+        assert!(parse_workspaces(r#"{"name":"x"}"#).is_empty());
+    }
+
+    // ---- judgment B: context fit against a real directory tree ----
+
+    fn write(dir: &std::path::Path, rel: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "x").unwrap();
+    }
+
+    #[test]
+    fn fit_usable_when_all_sources_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "package.json");
+        write(tmp.path(), "src/index.ts");
+        let df = "FROM node:20\nWORKDIR /app\nCOPY package.json ./\nCOPY src ./src\nRUN npm ci";
+        assert!(matches!(
+            dockerfile_context_fit(df, tmp.path()),
+            DockerfileContextFit::Usable
+        ));
+    }
+
+    #[test]
+    fn fit_unusable_monorepo_root_dockerfile_in_subdir() {
+        // Simulates building modelcontextprotocol/servers' src/filesystem/Dockerfile
+        // from the src/filesystem subdirectory: `COPY src/filesystem /app` escapes.
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "package.json");
+        write(tmp.path(), "index.ts");
+        let df = "FROM node:22-alpine AS builder\nWORKDIR /app\nCOPY src/filesystem /app\nCOPY tsconfig.json /tsconfig.json\nRUN npm install\nFROM node:22-alpine\nCOPY --from=builder /app/dist /app/dist\nENTRYPOINT [\"node\", \"/app/dist/index.js\"]";
+        match dockerfile_context_fit(df, tmp.path()) {
+            DockerfileContextFit::Unusable { escaping } => {
+                let srcs: Vec<_> = escaping.iter().map(|e| e.source.as_str()).collect();
+                assert!(srcs.contains(&"src/filesystem"));
+                // The --from=builder copy must NOT be flagged.
+                assert!(!srcs.iter().any(|s| s.contains("dist")));
+            }
+            DockerfileContextFit::Usable => panic!("should be unusable"),
+        }
+    }
+
+    #[test]
+    fn fit_flags_parent_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let df = "FROM node:20\nCOPY ../shared /app";
+        match dockerfile_context_fit(df, tmp.path()) {
+            DockerfileContextFit::Unusable { escaping } => {
+                assert_eq!(escaping[0].reason, EscapeReason::ParentTraversal);
+            }
+            _ => panic!("should be unusable"),
+        }
+    }
+
+    #[test]
+    fn fit_glob_ok_when_parent_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "package.json");
+        let df = "FROM node:20\nCOPY package*.json ./";
+        assert!(matches!(
+            dockerfile_context_fit(df, tmp.path()),
+            DockerfileContextFit::Usable
+        ));
+    }
+
+    #[test]
+    fn list_workspace_members_expands_star() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/filesystem")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/git")).unwrap();
+        let members = list_workspace_members(tmp.path(), &["src/*".to_string()]);
+        assert_eq!(members, vec!["src/filesystem", "src/git"]);
+    }
+
+    // ---- strategy 3: workspace membership + entry prefixing ----
+
+    #[test]
+    fn subdir_membership() {
+        let ws = vec!["src/*".to_string()];
+        assert!(subdir_is_workspace_member("src/filesystem", &ws));
+        assert!(subdir_is_workspace_member("/src/filesystem/", &ws));
+        assert!(!subdir_is_workspace_member("src/filesystem/sub", &ws));
+        assert!(!subdir_is_workspace_member("packages/a", &ws));
+        assert!(subdir_is_workspace_member("a", &["*".to_string()]));
+        assert!(subdir_is_workspace_member("packages/a", &["packages/a".to_string()]));
+        // pnpm recursive glob: any depth under the prefix.
+        let rec = vec!["packages/**".to_string()];
+        assert!(subdir_is_workspace_member("packages/a", &rec));
+        assert!(subdir_is_workspace_member("packages/group/a", &rec));
+        assert!(!subdir_is_workspace_member("packages", &rec));
+        assert!(!subdir_is_workspace_member("apps/a", &rec));
+    }
+
+    // ---- pnpm: workspace parsing + package-manager detection ----
+
+    #[test]
+    fn parse_pnpm_workspace_block_inline_and_negation() {
+        let block = "packages:\n  - 'packages/*'\n  - \"apps/*\"\n  - '!**/test/**'\nonlyBuiltDependencies:\n  - esbuild\n";
+        assert_eq!(parse_pnpm_workspace(block), vec!["packages/*", "apps/*"]);
+        let inline = "packages: ['packages/*', 'tools/*']\n";
+        assert_eq!(parse_pnpm_workspace(inline), vec!["packages/*", "tools/*"]);
+        assert!(parse_pnpm_workspace("name: x\n").is_empty());
+    }
+
+    #[test]
+    fn detect_workspace_globs_merges_npm_and_pnpm() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
+        std::fs::write(tmp.path().join("pnpm-workspace.yaml"), "packages:\n  - 'src/*'\n").unwrap();
+        assert_eq!(detect_workspace_globs(tmp.path()), vec!["src/*"]);
+    }
+
+    #[test]
+    fn detect_node_pm_signals() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
+        assert_eq!(detect_node_pm(tmp.path()), NodePm::Npm);
+        std::fs::write(tmp.path().join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+        assert_eq!(detect_node_pm(tmp.path()), NodePm::Pnpm);
+
+        let tmp2 = tempfile::tempdir().unwrap();
+        std::fs::write(tmp2.path().join("package.json"), r#"{"packageManager":"pnpm@9.1.0"}"#).unwrap();
+        assert_eq!(detect_node_pm(tmp2.path()), NodePm::Pnpm);
+    }
+
+    #[test]
+    fn node_setup_section_switches_on_pm() {
+        let npm = node_setup_section(NodePm::Npm, None);
+        assert!(npm.contains("npm ci"));
+        assert!(npm.contains("npm run build --if-present"));
+        assert!(!npm.contains("pnpm"));
+
+        let pnpm = node_setup_section(NodePm::Pnpm, None);
+        assert!(pnpm.contains("corepack enable"));
+        assert!(pnpm.contains("pnpm install"));
+        assert!(pnpm.contains("pnpm run build --if-present"));
+        assert!(!pnpm.contains("npm ci"));
+
+        // A custom build command overrides the default for either manager.
+        assert!(node_setup_section(NodePm::Pnpm, Some("pnpm compile")).contains("RUN pnpm compile"));
+    }
+
+    #[test]
+    fn jsonrpc_detection() {
+        assert!(looks_like_jsonrpc(r#"{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{}}}"#));
+        assert!(looks_like_jsonrpc(r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32000}}"#));
+        // SSE-framed reply.
+        assert!(looks_like_jsonrpc("event: message\ndata: {\"jsonrpc\":\"2.0\",\"result\":{}}\n\n"));
+        // Not JSON-RPC.
+        assert!(!looks_like_jsonrpc("Internal Server Error"));
+        assert!(!looks_like_jsonrpc("<html>502</html>"));
+    }
+
+    #[test]
+    fn snippet_is_char_safe() {
+        let s = "あ".repeat(300);
+        let out = snippet(&s);
+        assert!(out.ends_with('…'));
+        assert!(out.chars().count() <= 201);
+    }
+
+    #[test]
+    fn prefix_entry_node_and_npm() {
+        assert_eq!(
+            prefix_entry_with_subdir("node dist/index.js", "src/filesystem"),
+            "node src/filesystem/dist/index.js"
+        );
+        assert_eq!(
+            prefix_entry_with_subdir("node dist/index.js /tmp", "src/filesystem"),
+            "node src/filesystem/dist/index.js /tmp"
+        );
+        assert_eq!(
+            prefix_entry_with_subdir("npm start", "src/git"),
+            "npm --prefix src/git start"
+        );
+        // Unrewritable shapes pass through unchanged.
+        assert_eq!(prefix_entry_with_subdir("./server", "src/x"), "./server");
+        assert_eq!(prefix_entry_with_subdir("node dist/index.js", ""), "node dist/index.js");
     }
 }
