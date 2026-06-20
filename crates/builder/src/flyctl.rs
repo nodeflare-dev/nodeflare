@@ -2045,6 +2045,123 @@ async fn get_machine_id(config: &AppConfig, app_name: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("No machines found"))
 }
 
+// ============================================================================
+// Post-deploy MCP verification (judgment D)
+//
+// A built image + a started machine does NOT mean the MCP server runs: a wrong
+// entry path leaves the stdio adapter listening (HTTP up) while the child process
+// crash-loops, so the deploy looks "successful" but every real request 500s. We
+// probe a real MCP `initialize` against the deployed endpoint and only trust the
+// deploy when the child actually answers.
+//
+// Direction: fail the deploy only on a *proven* failure (the adapter returns 5xx
+// across retries — i.e. the child is dead). Cold-start/network noise is reported as
+// Inconclusive and does NOT fail the deploy, to avoid false negatives.
+// ============================================================================
+
+pub(crate) enum ProbeOutcome {
+    /// The MCP server answered an initialize request.
+    Verified,
+    /// The server is reachable but failed (adapter 5xx) — the child isn't running.
+    Broken(String),
+    /// Couldn't get a definitive answer (timeouts/cold start) — don't fail on this.
+    Inconclusive(String),
+}
+
+/// Char-safe short preview of a response body for logs/errors.
+fn snippet(s: &str) -> String {
+    let s = s.trim();
+    let short: String = s.chars().take(200).collect();
+    if short.len() < s.len() {
+        format!("{}…", short)
+    } else {
+        short
+    }
+}
+
+/// True if `body` looks like a JSON-RPC reply (json, or an SSE `data:` line).
+fn looks_like_jsonrpc(body: &str) -> bool {
+    let json_part = body
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("data:").map(str::trim))
+        .unwrap_or_else(|| body.trim());
+    serde_json::from_str::<serde_json::Value>(json_part)
+        .map(|v| v.get("result").is_some() || v.get("error").is_some() || v.get("jsonrpc").is_some())
+        .unwrap_or(false)
+}
+
+/// Probe the deployed MCP server with a real `initialize` request (judgment D).
+pub(crate) async fn verify_mcp_initialize(
+    endpoint_url: &str,
+    mcp_path: &str,
+    on_log: &impl Fn(&str),
+) -> ProbeOutcome {
+    let path = if mcp_path.is_empty() { "/mcp" } else { mcp_path };
+    let url = format!(
+        "{}/{}",
+        endpoint_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": { "name": "nodeflare-probe", "version": "1.0" }
+        }
+    });
+
+    const ATTEMPTS: usize = 8;
+    let mut saw_server_error = false;
+    let mut last_detail = String::from("no response");
+
+    for attempt in 1..=ATTEMPTS {
+        match client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                if status.is_success() && looks_like_jsonrpc(&text) {
+                    on_log(&format!("MCP server verified: initialize responded ({})", status));
+                    return ProbeOutcome::Verified;
+                }
+                if status.is_server_error() {
+                    saw_server_error = true;
+                }
+                last_detail = format!("HTTP {}: {}", status.as_u16(), snippet(&text));
+            }
+            Err(e) => {
+                last_detail = format!("request error: {}", e);
+            }
+        }
+        if attempt < ATTEMPTS {
+            on_log(&format!(
+                "Verifying MCP server… not ready yet (attempt {}/{}: {})",
+                attempt, ATTEMPTS, last_detail
+            ));
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    }
+
+    if saw_server_error {
+        ProbeOutcome::Broken(last_detail)
+    } else {
+        ProbeOutcome::Inconclusive(last_detail)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2444,6 +2561,25 @@ mod tests {
         assert!(!subdir_is_workspace_member("packages/a", &ws));
         assert!(subdir_is_workspace_member("a", &["*".to_string()]));
         assert!(subdir_is_workspace_member("packages/a", &["packages/a".to_string()]));
+    }
+
+    #[test]
+    fn jsonrpc_detection() {
+        assert!(looks_like_jsonrpc(r#"{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{}}}"#));
+        assert!(looks_like_jsonrpc(r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32000}}"#));
+        // SSE-framed reply.
+        assert!(looks_like_jsonrpc("event: message\ndata: {\"jsonrpc\":\"2.0\",\"result\":{}}\n\n"));
+        // Not JSON-RPC.
+        assert!(!looks_like_jsonrpc("Internal Server Error"));
+        assert!(!looks_like_jsonrpc("<html>502</html>"));
+    }
+
+    #[test]
+    fn snippet_is_char_safe() {
+        let s = "あ".repeat(300);
+        let out = snippet(&s);
+        assert!(out.ends_with('…'));
+        assert!(out.chars().count() <= 201);
     }
 
     #[test]

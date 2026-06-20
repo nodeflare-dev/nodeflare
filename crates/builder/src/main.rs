@@ -648,9 +648,36 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         &job,
         &build_context,
         &secrets,
-        on_log,
+        on_log.clone(),
     )
     .await;
+
+    // Judgment D: a built image and a started machine don't prove the MCP server
+    // runs — a wrong entry path leaves the adapter listening while the child process
+    // crash-loops, so the deploy looks successful but every request 500s. Probe a
+    // real MCP initialize and demote a proven-broken server to a failure so it goes
+    // through normal failure reporting instead of being shown as "succeeded".
+    let build_result = match build_result {
+        Ok(deploy_result) => {
+            match flyctl::verify_mcp_initialize(&deploy_result.endpoint_url, "/mcp", &on_log).await {
+                flyctl::ProbeOutcome::Verified => Ok(deploy_result),
+                flyctl::ProbeOutcome::Inconclusive(detail) => {
+                    on_log(&format!(
+                        "Warning: could not verify the MCP server responded; leaving as deployed. ({})",
+                        detail
+                    ));
+                    Ok(deploy_result)
+                }
+                flyctl::ProbeOutcome::Broken(detail) => Err(anyhow::anyhow!(
+                    "Deployment reached Fly.io but the MCP server did not start ({}). \
+                    This is usually a wrong startup command or missing build output — \
+                    check the server logs.",
+                    detail
+                )),
+            }
+        }
+        Err(e) => Err(e),
+    };
 
     match build_result {
         Ok(deploy_result) => {
