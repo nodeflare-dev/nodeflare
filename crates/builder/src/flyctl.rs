@@ -124,6 +124,337 @@ fn parse_docker_command(s: &str) -> Option<String> {
     None
 }
 
+// ============================================================================
+// Dockerfile context-fit check (judgment B)
+//
+// A repo's own Dockerfile is only usable when built from a given context if all
+// of its COPY/ADD sources resolve inside that context. A Dockerfile written for
+// a monorepo root (e.g. `COPY src/filesystem /app`, `COPY tsconfig.json …`) cannot
+// build from the `src/filesystem` subdirectory — those paths aren't there. Adopting
+// it anyway breaks the build and pins a stale entry command. We detect that and
+// fall back to generating our own Dockerfile instead.
+//
+// Direction of the check: we only discard the repo Dockerfile on a *provable*
+// escape (a literal path that isn't present, or a `..` traversal). Anything we
+// can't resolve statically (unresolved ${VARS}, remote URLs, globs) is left to the
+// author — a false "usable" is caught loudly by the build / the post-deploy probe,
+// whereas a false "unusable" would silently replace a working build.
+// ============================================================================
+
+/// A build-context-relative source path referenced by a COPY/ADD instruction.
+#[derive(Debug, Clone, PartialEq)]
+struct ContextSource {
+    /// The source path as written (may contain globs), e.g. "src/filesystem".
+    raw: String,
+    /// The full logical instruction, for diagnostics, e.g. "COPY src/filesystem /app".
+    instruction: String,
+}
+
+#[derive(Debug, PartialEq)]
+enum EscapeReason {
+    /// The path does not exist inside the build context.
+    NotFound,
+    /// The path reaches outside the context via `..`.
+    ParentTraversal,
+}
+
+struct EscapingSource {
+    instruction: String,
+    source: String,
+    #[allow(dead_code)]
+    reason: EscapeReason,
+}
+
+enum DockerfileContextFit {
+    Usable,
+    Unusable { escaping: Vec<EscapingSource> },
+}
+
+/// Join physical Dockerfile lines into logical instructions, honoring `\` line
+/// continuations and dropping full-line comments / blank lines. A `#` only starts
+/// a comment when it is not in the middle of a continued instruction.
+fn logical_instructions(dockerfile: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for raw_line in dockerfile.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        let trimmed = line.trim();
+        if current.is_empty() && (trimmed.is_empty() || trimmed.starts_with('#')) {
+            continue;
+        }
+        let continues = line.trim_end().ends_with('\\');
+        let segment = if continues {
+            let s = line.trim_end();
+            s[..s.len() - 1].trim()
+        } else {
+            trimmed
+        };
+        if current.is_empty() {
+            current.push_str(segment);
+        } else if !segment.is_empty() {
+            current.push(' ');
+            current.push_str(segment);
+        }
+        if !continues {
+            out.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// Split the text after a COPY/ADD keyword into (leading flags, operands).
+/// Handles shell form (`--flag a b dest`) and JSON exec form (`--flag ["a","dest"]`).
+fn split_copy_tokens(rest: &str) -> (Vec<String>, Vec<String>) {
+    let mut flags = Vec::new();
+    let mut remainder = rest.trim();
+    while let Some(stripped) = remainder.strip_prefix("--") {
+        let end = stripped.find(char::is_whitespace).unwrap_or(stripped.len());
+        flags.push(format!("--{}", &stripped[..end]));
+        remainder = stripped[end..].trim_start();
+    }
+    let operands = if remainder.starts_with('[') {
+        parse_json_string_array(remainder)
+    } else {
+        tokenize_shell(remainder)
+    };
+    (flags, operands)
+}
+
+/// Extract string elements from a JSON array literal: `["a", "b"]` -> [a, b].
+fn parse_json_string_array(s: &str) -> Vec<String> {
+    let s = s.trim();
+    if !(s.starts_with('[') && s.ends_with(']')) {
+        return Vec::new();
+    }
+    s[1..s.len() - 1]
+        .split(',')
+        .map(|p| p.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Quote-aware whitespace tokenizer for the shell form of COPY/ADD.
+fn tokenize_shell(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut in_token = false;
+    for c in s.chars() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else {
+                    cur.push(c);
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                    in_token = true;
+                } else if c.is_whitespace() {
+                    if in_token {
+                        tokens.push(std::mem::take(&mut cur));
+                        in_token = false;
+                    }
+                } else {
+                    cur.push(c);
+                    in_token = true;
+                }
+            }
+        }
+    }
+    if in_token {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+fn has_glob(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
+}
+
+/// True for ADD sources that come from the network / a git ref, not the context.
+fn is_remote_source(src: &str) -> bool {
+    let s = src.to_lowercase();
+    s.starts_with("http://")
+        || s.starts_with("https://")
+        || s.starts_with("ftp://")
+        || s.starts_with("git@")
+        || s.starts_with("git://")
+        || (s.contains("github.com/") && s.contains('#'))
+}
+
+/// True if the path contains an unresolved build variable (`$VAR`/`${VAR}`),
+/// treating `$$` as an escaped literal dollar.
+fn contains_unresolved_var(src: &str) -> bool {
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' {
+            if bytes.get(i + 1) == Some(&b'$') {
+                i += 2;
+                continue;
+            }
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Collect every build-context-relative COPY/ADD source in a Dockerfile.
+/// Excludes `--from=<stage>` copies, remote ADD URLs, heredocs and `$VAR` paths.
+fn parse_context_sources(dockerfile: &str) -> Vec<ContextSource> {
+    let mut sources = Vec::new();
+    for instr in logical_instructions(dockerfile) {
+        let mut it = instr.splitn(2, char::is_whitespace);
+        let keyword = it.next().unwrap_or("").to_uppercase();
+        if keyword != "COPY" && keyword != "ADD" {
+            continue;
+        }
+        let rest = it.next().unwrap_or("").trim();
+        let (flags, operands) = split_copy_tokens(rest);
+        // `--from=` -> source is a build stage / external image, not the context.
+        if flags.iter().any(|f| f == "--from" || f.starts_with("--from=")) {
+            continue;
+        }
+        // Need at least one source plus a destination to interpret reliably.
+        if operands.len() < 2 {
+            continue;
+        }
+        let is_add = keyword == "ADD";
+        for src in &operands[..operands.len() - 1] {
+            if src.starts_with("<<") {
+                continue; // heredoc inline content
+            }
+            if is_add && is_remote_source(src) {
+                continue;
+            }
+            if contains_unresolved_var(src) {
+                continue;
+            }
+            sources.push(ContextSource {
+                raw: src.clone(),
+                instruction: instr.clone(),
+            });
+        }
+    }
+    sources
+}
+
+/// Longest leading path with no glob metacharacter (drops the globbed segment on).
+fn glob_static_prefix(norm: &str) -> String {
+    let mut parts = Vec::new();
+    for seg in norm.split('/') {
+        if has_glob(seg) {
+            break;
+        }
+        parts.push(seg);
+    }
+    parts.join("/")
+}
+
+/// Decide whether a single context source escapes `context_dir`.
+fn source_escapes(
+    raw: &str,
+    context_dir: &Path,
+    canonical_ctx: Option<&Path>,
+) -> Option<EscapeReason> {
+    let norm = raw.trim_start_matches('/').replace('\\', "/");
+    if norm.is_empty() || norm == "." || norm == "./" {
+        return None; // whole context
+    }
+    if norm.split('/').any(|seg| seg == "..") {
+        return Some(EscapeReason::ParentTraversal);
+    }
+    let check_path = if has_glob(&norm) {
+        glob_static_prefix(&norm)
+    } else {
+        norm.clone()
+    };
+    if check_path.is_empty() {
+        return None; // glob whose parent is the context root
+    }
+    let full = context_dir.join(&check_path);
+    if !full.exists() {
+        return Some(EscapeReason::NotFound);
+    }
+    // Symlink safety: a link pointing outside the context is not "inside" it.
+    if let (Ok(canon), Some(ctx)) = (full.canonicalize(), canonical_ctx) {
+        if !canon.starts_with(ctx) {
+            return Some(EscapeReason::NotFound);
+        }
+    }
+    None
+}
+
+/// Judgment B: is the repo's Dockerfile buildable from `context_dir`?
+fn dockerfile_context_fit(dockerfile: &str, context_dir: &Path) -> DockerfileContextFit {
+    let canonical_ctx = context_dir.canonicalize().ok();
+    let mut escaping = Vec::new();
+    for cs in parse_context_sources(dockerfile) {
+        if let Some(reason) = source_escapes(&cs.raw, context_dir, canonical_ctx.as_deref()) {
+            escaping.push(EscapingSource {
+                instruction: cs.instruction,
+                source: cs.raw,
+                reason,
+            });
+        }
+    }
+    if escaping.is_empty() {
+        DockerfileContextFit::Usable
+    } else {
+        DockerfileContextFit::Unusable { escaping }
+    }
+}
+
+/// Workspace member globs declared in a package.json (npm/yarn workspaces).
+/// Handles both the array form and the `{ "packages": [...] }` object form.
+/// Empty when the field is absent.
+fn parse_workspaces(package_json: &str) -> Vec<String> {
+    let Ok(pkg) = serde_json::from_str::<serde_json::Value>(package_json) else {
+        return Vec::new();
+    };
+    match pkg.get("workspaces") {
+        Some(serde_json::Value::Array(a)) => {
+            a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
+        }
+        Some(serde_json::Value::Object(o)) => o
+            .get("packages")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Expand simple `prefix/*` workspace globs into the actual subdirectories present,
+/// for guiding the user toward a concrete target. Literal members pass through.
+fn list_workspace_members(root: &Path, globs: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for g in globs {
+        if let Some(prefix) = g.strip_suffix("/*") {
+            if let Ok(rd) = std::fs::read_dir(root.join(prefix)) {
+                for entry in rd.flatten() {
+                    if entry.path().is_dir() {
+                        if let Some(name) = entry.file_name().to_str() {
+                            out.push(format!("{}/{}", prefix, name));
+                        }
+                    }
+                }
+            }
+        } else if !has_glob(g) {
+            out.push(g.clone());
+        }
+    }
+    out.sort();
+    out
+}
+
 #[derive(Debug, Deserialize)]
 struct MachineInfo {
     id: String,
@@ -1405,6 +1736,27 @@ pub async fn build_and_deploy(
         None
     };
 
+    // Judgment B: only adopt the repo's Dockerfile if it can actually build from THIS
+    // context. A Dockerfile written for a monorepo root (e.g. `COPY src/<pkg> /app`)
+    // references paths that don't exist when built from a subdirectory; adopting it
+    // would break the build and pin a stale entry command. Discard it — and, with it,
+    // any entry command we'd otherwise extract from it — and generate our own instead.
+    let existing_dockerfile = match existing_dockerfile {
+        Some(df) => match dockerfile_context_fit(&df, source_dir) {
+            DockerfileContextFit::Usable => Some(df),
+            DockerfileContextFit::Unusable { escaping } => {
+                for e in &escaping {
+                    on_log(&format!(
+                        "Ignoring repo Dockerfile: `{}` references `{}` which is not in the build context — generating a Dockerfile instead.",
+                        e.instruction, e.source
+                    ));
+                }
+                None
+            }
+        },
+        None => None,
+    };
+
     // For STDIO transport with existing Dockerfile, extract the entry command
     let existing_entry_command = if job.transport == "stdio" {
         if let Some(ref content) = existing_dockerfile {
@@ -1440,6 +1792,31 @@ pub async fn build_and_deploy(
         && existing_entry_command.is_none()
         && detected_entry.is_none()
     {
+        // A workspaces monorepo root has no runnable entry of its own — the build
+        // output lives under a specific member (e.g. src/filesystem/dist/index.js).
+        // Don't guess: tell the user which members exist and how to target one.
+        let workspaces = std::fs::read_to_string(source_dir.join("package.json"))
+            .ok()
+            .map(|c| parse_workspaces(&c))
+            .unwrap_or_default();
+        if !workspaces.is_empty() {
+            let members = list_workspace_members(source_dir, &workspaces);
+            let target_hint = if members.is_empty() {
+                workspaces.join(", ")
+            } else {
+                members.join(", ")
+            };
+            anyhow::bail!(
+                "This looks like a monorepo (package.json declares workspaces: {}). \
+                Nodeflare can't tell which server to run, so it won't guess. \
+                Set the Root Directory to the target package — one of: {} — \
+                and/or set the startup command (e.g. `node {}/dist/index.js`).",
+                workspaces.join(", "),
+                target_hint,
+                members.first().map(String::as_str).unwrap_or("<package>"),
+            );
+        }
+
         let example = match job.runtime.as_str() {
             "node" => "node index.js, npx @modelcontextprotocol/server-xxx",
             "python" => "python main.py, uv run mcp-server",
@@ -1876,5 +2253,135 @@ mod tests {
         let out = apply_provision(df, &p).expect("should inject apt");
         assert!(out.contains("apt-get install"));
         assert!(out.contains("chromium"));
+    }
+
+    // ---- judgment B: COPY/ADD context-source parsing (pure) ----
+
+    fn raws(df: &str) -> Vec<String> {
+        parse_context_sources(df).into_iter().map(|c| c.raw).collect()
+    }
+
+    #[test]
+    fn ctx_sources_literal_and_multi() {
+        assert_eq!(raws("COPY src/filesystem /app"), vec!["src/filesystem"]);
+        assert_eq!(raws("COPY a b /dst"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn ctx_sources_json_exec_form() {
+        assert_eq!(raws(r#"COPY ["x", "y"]"#), vec!["x"]);
+    }
+
+    #[test]
+    fn ctx_sources_flags_and_from_and_remote() {
+        assert_eq!(raws("COPY --chown=node:node app /app"), vec!["app"]);
+        assert!(raws("COPY --from=builder /a /b").is_empty());
+        assert!(raws("COPY --from=nginx:latest /a /b").is_empty());
+        assert!(raws("ADD https://h/x.tar /x").is_empty());
+        assert!(raws("ADD git@github.com:o/r.git#main /x").is_empty());
+    }
+
+    #[test]
+    fn ctx_sources_vars_heredoc_and_dot() {
+        assert!(raws("COPY ${SRC} /app").is_empty());
+        assert_eq!(raws("COPY $$literal /app"), vec!["$$literal"]);
+        assert_eq!(raws("COPY . ."), vec!["."]);
+    }
+
+    #[test]
+    fn ctx_sources_line_continuation_and_comments() {
+        let df = "# comment\nCOPY \\\n  a \\\n  b /dst\nRUN echo hi\n";
+        assert_eq!(raws(df), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn ctx_sources_ignores_non_copy() {
+        assert!(raws("RUN npm ci\nWORKDIR /app\nFROM node:20").is_empty());
+    }
+
+    #[test]
+    fn ctx_sources_glob_preserved() {
+        assert_eq!(raws("COPY package*.json ./"), vec!["package*.json"]);
+    }
+
+    #[test]
+    fn parse_workspaces_array_and_object() {
+        assert_eq!(parse_workspaces(r#"{"workspaces":["src/*"]}"#), vec!["src/*"]);
+        assert_eq!(
+            parse_workspaces(r#"{"workspaces":{"packages":["a","b/*"]}}"#),
+            vec!["a", "b/*"]
+        );
+        assert!(parse_workspaces(r#"{"name":"x"}"#).is_empty());
+    }
+
+    // ---- judgment B: context fit against a real directory tree ----
+
+    fn write(dir: &std::path::Path, rel: &str) {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, "x").unwrap();
+    }
+
+    #[test]
+    fn fit_usable_when_all_sources_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "package.json");
+        write(tmp.path(), "src/index.ts");
+        let df = "FROM node:20\nWORKDIR /app\nCOPY package.json ./\nCOPY src ./src\nRUN npm ci";
+        assert!(matches!(
+            dockerfile_context_fit(df, tmp.path()),
+            DockerfileContextFit::Usable
+        ));
+    }
+
+    #[test]
+    fn fit_unusable_monorepo_root_dockerfile_in_subdir() {
+        // Simulates building modelcontextprotocol/servers' src/filesystem/Dockerfile
+        // from the src/filesystem subdirectory: `COPY src/filesystem /app` escapes.
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "package.json");
+        write(tmp.path(), "index.ts");
+        let df = "FROM node:22-alpine AS builder\nWORKDIR /app\nCOPY src/filesystem /app\nCOPY tsconfig.json /tsconfig.json\nRUN npm install\nFROM node:22-alpine\nCOPY --from=builder /app/dist /app/dist\nENTRYPOINT [\"node\", \"/app/dist/index.js\"]";
+        match dockerfile_context_fit(df, tmp.path()) {
+            DockerfileContextFit::Unusable { escaping } => {
+                let srcs: Vec<_> = escaping.iter().map(|e| e.source.as_str()).collect();
+                assert!(srcs.contains(&"src/filesystem"));
+                // The --from=builder copy must NOT be flagged.
+                assert!(!srcs.iter().any(|s| s.contains("dist")));
+            }
+            DockerfileContextFit::Usable => panic!("should be unusable"),
+        }
+    }
+
+    #[test]
+    fn fit_flags_parent_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let df = "FROM node:20\nCOPY ../shared /app";
+        match dockerfile_context_fit(df, tmp.path()) {
+            DockerfileContextFit::Unusable { escaping } => {
+                assert_eq!(escaping[0].reason, EscapeReason::ParentTraversal);
+            }
+            _ => panic!("should be unusable"),
+        }
+    }
+
+    #[test]
+    fn fit_glob_ok_when_parent_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), "package.json");
+        let df = "FROM node:20\nCOPY package*.json ./";
+        assert!(matches!(
+            dockerfile_context_fit(df, tmp.path()),
+            DockerfileContextFit::Usable
+        ));
+    }
+
+    #[test]
+    fn list_workspace_members_expands_star() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/filesystem")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/git")).unwrap();
+        let members = list_workspace_members(tmp.path(), &["src/*".to_string()]);
+        assert_eq!(members, vec!["src/filesystem", "src/git"]);
     }
 }
