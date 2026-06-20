@@ -432,12 +432,79 @@ pub(crate) fn parse_workspaces(package_json: &str) -> Vec<String> {
     }
 }
 
-/// Expand simple `prefix/*` workspace globs into the actual subdirectories present,
-/// for guiding the user toward a concrete target. Literal members pass through.
+/// Extract package globs from a pnpm-workspace.yaml `packages:` list. Minimal and
+/// line-based (avoids pulling in a YAML dependency): collects `- <glob>` items under
+/// the `packages:` key (block form) or `packages: [...]` (inline flow form), strips
+/// quotes, and skips negation (`!`) exclusion patterns.
+pub(crate) fn parse_pnpm_workspace(yaml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_packages = false;
+    for raw in yaml.lines() {
+        let line = raw.trim_end_matches('\r');
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indented = line.starts_with([' ', '\t']);
+        if !indented {
+            // A new top-level key ends any previous block; check if it's `packages:`.
+            in_packages = false;
+            if let Some(rest) = trimmed.strip_prefix("packages:") {
+                let rest = rest.trim();
+                if rest.starts_with('[') {
+                    out.extend(parse_inline_glob_array(rest));
+                } else {
+                    in_packages = true;
+                }
+            }
+            continue;
+        }
+        if in_packages {
+            if let Some(item) = trimmed.strip_prefix('-') {
+                let g = item.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !g.is_empty() && !g.starts_with('!') {
+                    out.push(g);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn parse_inline_glob_array(s: &str) -> Vec<String> {
+    s.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|p| p.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|g| !g.is_empty() && !g.starts_with('!'))
+        .collect()
+}
+
+/// Detect workspace member globs for a repo directory across npm/yarn
+/// (package.json `workspaces`) and pnpm (pnpm-workspace.yaml). Empty when the repo
+/// is not a workspaces monorepo.
+pub(crate) fn detect_workspace_globs(dir: &Path) -> Vec<String> {
+    let mut globs = Vec::new();
+    if let Ok(pkg) = std::fs::read_to_string(dir.join("package.json")) {
+        globs.extend(parse_workspaces(&pkg));
+    }
+    if let Ok(y) = std::fs::read_to_string(dir.join("pnpm-workspace.yaml"))
+        .or_else(|_| std::fs::read_to_string(dir.join("pnpm-workspace.yml")))
+    {
+        globs.extend(parse_pnpm_workspace(&y));
+    }
+    globs.sort();
+    globs.dedup();
+    globs
+}
+
+/// Expand `prefix/*` and `prefix/**` workspace globs into the actual subdirectories
+/// present, for guiding the user toward a concrete target. Literal members pass through.
 fn list_workspace_members(root: &Path, globs: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for g in globs {
-        if let Some(prefix) = g.strip_suffix("/*") {
+        if let Some(prefix) = g.strip_suffix("/**").or_else(|| g.strip_suffix("/*")) {
             if let Ok(rd) = std::fs::read_dir(root.join(prefix)) {
                 for entry in rd.flatten() {
                     if entry.path().is_dir() {
@@ -452,16 +519,25 @@ fn list_workspace_members(root: &Path, globs: &[String]) -> Vec<String> {
         }
     }
     out.sort();
+    out.dedup();
     out
 }
 
 /// Whether `subdir` (repo-relative, e.g. "src/filesystem") is matched by one of the
-/// workspace globs. Supports the common `prefix/*` and `*` and literal forms.
+/// workspace globs. Supports `prefix/**` (any depth), `prefix/*` (direct child),
+/// `*` and literal forms.
 pub(crate) fn subdir_is_workspace_member(subdir: &str, globs: &[String]) -> bool {
     let subdir = subdir.trim_matches('/');
     globs.iter().any(|g| {
         let g = g.trim_matches('/');
-        if let Some(prefix) = g.strip_suffix("/*") {
+        if let Some(prefix) = g.strip_suffix("/**") {
+            let prefix = prefix.trim_matches('/');
+            prefix.is_empty()
+                || (subdir.len() > prefix.len()
+                    && subdir.starts_with(prefix)
+                    && subdir.as_bytes().get(prefix.len()) == Some(&b'/'))
+        } else if let Some(prefix) = g.strip_suffix("/*") {
+            let prefix = prefix.trim_matches('/');
             match subdir.strip_prefix(prefix) {
                 Some(rest) => {
                     let rest = rest.trim_start_matches('/');
@@ -559,6 +635,26 @@ primary_region = "{region}"
     )
 }
 
+/// Node package manager a project uses, which drives the install/build commands.
+/// Only npm and pnpm are distinguished; yarn projects install fine via npm and are
+/// left as Npm to avoid changing their (working) behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(crate) enum NodePm {
+    #[default]
+    Npm,
+    Pnpm,
+}
+
+impl NodePm {
+    /// The `run` prefix used to invoke package scripts (`npm run` / `pnpm run`).
+    fn runner(self) -> &'static str {
+        match self {
+            NodePm::Npm => "npm run",
+            NodePm::Pnpm => "pnpm run",
+        }
+    }
+}
+
 /// Project structure information detected from source directory
 #[derive(Debug, Default)]
 pub struct ProjectStructure {
@@ -588,6 +684,8 @@ pub struct ProjectStructure {
     pub python_deps: Vec<String>,
     /// Module paths from go.mod `require` entries.
     pub go_deps: Vec<String>,
+    /// Detected Node package manager (npm vs pnpm), driving install/build commands.
+    pub(crate) node_pm: NodePm,
 }
 
 impl ProjectStructure {
@@ -621,6 +719,9 @@ pub async fn detect_project_structure(source_dir: &Path) -> ProjectStructure {
     structure.has_uv_lock = source_dir.join("uv.lock").exists();
     structure.has_requirements_txt = source_dir.join("requirements.txt").exists();
     structure.has_package_json = source_dir.join("package.json").exists();
+    if structure.has_package_json {
+        structure.node_pm = detect_node_pm(source_dir);
+    }
 
     // Detect Python entry point (in priority order)
     let python_entry_candidates = [
@@ -1152,13 +1253,59 @@ fn generate_dockerfile(
     generate_stdio_dockerfile(runtime, mcp_path, existing_dockerfile, existing_entry_command, entry_command, build_command, project)
 }
 
+/// Detect the Node package manager from lockfiles, the pnpm workspace file, or the
+/// package.json `packageManager` field. Defaults to npm.
+fn detect_node_pm(dir: &Path) -> NodePm {
+    if dir.join("pnpm-lock.yaml").exists()
+        || dir.join("pnpm-workspace.yaml").exists()
+        || dir.join("pnpm-workspace.yml").exists()
+    {
+        return NodePm::Pnpm;
+    }
+    if let Ok(content) = std::fs::read_to_string(dir.join("package.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(pm) = v.get("packageManager").and_then(|p| p.as_str()) {
+                if pm.trim_start().starts_with("pnpm") {
+                    return NodePm::Pnpm;
+                }
+            }
+        }
+    }
+    NodePm::Npm
+}
+
 /// Build step for the Node image-build stage.
 /// If the user supplied a custom `build_command`, run exactly that; otherwise run the
-/// project's own `build` npm script when present (a no-op if the script is absent).
-fn node_build_step(build_command: Option<&str>) -> String {
+/// project's own `build` script when present (a no-op if the script is absent).
+fn node_build_step(build_command: Option<&str>, pm: NodePm) -> String {
     match build_command {
         Some(cmd) if !cmd.trim().is_empty() => format!("RUN {}", cmd.trim()),
-        _ => "RUN npm run build --if-present".to_string(),
+        _ => format!("RUN {} build --if-present", pm.runner()),
+    }
+}
+
+/// Dependency-install + source-copy + build section of the Node build stage.
+/// npm copies manifests first for layer caching, then the source; pnpm copies the
+/// whole context first because its lockfile, workspace file and member manifests are
+/// all needed before `pnpm install` (which matters for workspace monorepos).
+fn node_setup_section(pm: NodePm, build_command: Option<&str>) -> String {
+    let build = node_build_step(build_command, pm);
+    match pm {
+        NodePm::Pnpm => format!(
+            "COPY . .\n\
+             # Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.\n\
+             RUN corepack enable && (pnpm install --frozen-lockfile 2>/dev/null || pnpm install)\n\
+             # Run the project's own build script if it declares one (tsc/esbuild/etc.).\n\
+             {build}"
+        ),
+        NodePm::Npm => format!(
+            "COPY package*.json ./\n\
+             # Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.\n\
+             RUN npm ci 2>/dev/null || npm install\n\
+             COPY . .\n\
+             # Run the project's own build script if it declares one (tsc/esbuild/etc.).\n\
+             {build}"
+        ),
     }
 }
 
@@ -1175,8 +1322,8 @@ fn optional_build_step(build_command: Option<&str>) -> String {
 fn generate_sse_dockerfile(runtime: &str, build_command: Option<&str>, project: &ProjectStructure) -> String {
     match runtime {
         "node" => {
-            // Custom build_command if set, else the project's own `build` script (no-op if absent).
-            let build_step = node_build_step(build_command);
+            // Install/copy/build, using the detected package manager (npm or pnpm).
+            let setup = node_setup_section(project.node_pm, build_command);
             // Auto-detected start command from package.json; fall back to the historical default.
             let node_cmd = project
                 .node_entry
@@ -1186,13 +1333,7 @@ fn generate_sse_dockerfile(runtime: &str, build_command: Option<&str>, project: 
             format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package*.json ./
-# Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.
-RUN npm ci 2>/dev/null || npm install
-COPY . .
-# Run the project's own build script if it declares one (tsc/esbuild/etc.).
-# Output path is the project's concern; we don't hardcode it.
-{build_step}
+{setup}
 EXPOSE 3000
 CMD [{node_cmd}]
 "#)
@@ -1377,18 +1518,12 @@ CMD ["node", "stdio-adapter.cjs", "npx", "{package}"{extra_args_str}]
                 r#""node", "index.js""#.to_string()
             };
 
-            // Custom build_command if set, else the project's own `build` script (no-op if absent).
-            let build_step = node_build_step(build_command);
+            // Install/copy/build, using the detected package manager (npm or pnpm).
+            let setup = node_setup_section(project.node_pm, build_command);
             format!(r#"FROM node:20-slim
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY package*.json ./
-# Install ALL deps (incl. devDependencies) so a TypeScript/bundler build can run.
-RUN npm ci 2>/dev/null || npm install
-COPY . .
-# Run the project's own build script if it declares one (tsc/esbuild/etc.).
-# Output path is the project's concern; we don't hardcode it.
-{build_step}
+{setup}
 # STDIO adapter is already copied to source directory
 ENV PORT=3000
 ENV MCP_PATH="{mcp_path}"
@@ -1843,10 +1978,7 @@ pub async fn build_and_deploy(
         // A workspaces monorepo root has no runnable entry of its own — the build
         // output lives under a specific member (e.g. src/filesystem/dist/index.js).
         // Don't guess: tell the user which members exist and how to target one.
-        let workspaces = std::fs::read_to_string(source_dir.join("package.json"))
-            .ok()
-            .map(|c| parse_workspaces(&c))
-            .unwrap_or_default();
+        let workspaces = detect_workspace_globs(source_dir);
         if !workspaces.is_empty() {
             let members = list_workspace_members(source_dir, &workspaces);
             let target_hint = if members.is_empty() {
@@ -2561,6 +2693,61 @@ mod tests {
         assert!(!subdir_is_workspace_member("packages/a", &ws));
         assert!(subdir_is_workspace_member("a", &["*".to_string()]));
         assert!(subdir_is_workspace_member("packages/a", &["packages/a".to_string()]));
+        // pnpm recursive glob: any depth under the prefix.
+        let rec = vec!["packages/**".to_string()];
+        assert!(subdir_is_workspace_member("packages/a", &rec));
+        assert!(subdir_is_workspace_member("packages/group/a", &rec));
+        assert!(!subdir_is_workspace_member("packages", &rec));
+        assert!(!subdir_is_workspace_member("apps/a", &rec));
+    }
+
+    // ---- pnpm: workspace parsing + package-manager detection ----
+
+    #[test]
+    fn parse_pnpm_workspace_block_inline_and_negation() {
+        let block = "packages:\n  - 'packages/*'\n  - \"apps/*\"\n  - '!**/test/**'\nonlyBuiltDependencies:\n  - esbuild\n";
+        assert_eq!(parse_pnpm_workspace(block), vec!["packages/*", "apps/*"]);
+        let inline = "packages: ['packages/*', 'tools/*']\n";
+        assert_eq!(parse_pnpm_workspace(inline), vec!["packages/*", "tools/*"]);
+        assert!(parse_pnpm_workspace("name: x\n").is_empty());
+    }
+
+    #[test]
+    fn detect_workspace_globs_merges_npm_and_pnpm() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
+        std::fs::write(tmp.path().join("pnpm-workspace.yaml"), "packages:\n  - 'src/*'\n").unwrap();
+        assert_eq!(detect_workspace_globs(tmp.path()), vec!["src/*"]);
+    }
+
+    #[test]
+    fn detect_node_pm_signals() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
+        assert_eq!(detect_node_pm(tmp.path()), NodePm::Npm);
+        std::fs::write(tmp.path().join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+        assert_eq!(detect_node_pm(tmp.path()), NodePm::Pnpm);
+
+        let tmp2 = tempfile::tempdir().unwrap();
+        std::fs::write(tmp2.path().join("package.json"), r#"{"packageManager":"pnpm@9.1.0"}"#).unwrap();
+        assert_eq!(detect_node_pm(tmp2.path()), NodePm::Pnpm);
+    }
+
+    #[test]
+    fn node_setup_section_switches_on_pm() {
+        let npm = node_setup_section(NodePm::Npm, None);
+        assert!(npm.contains("npm ci"));
+        assert!(npm.contains("npm run build --if-present"));
+        assert!(!npm.contains("pnpm"));
+
+        let pnpm = node_setup_section(NodePm::Pnpm, None);
+        assert!(pnpm.contains("corepack enable"));
+        assert!(pnpm.contains("pnpm install"));
+        assert!(pnpm.contains("pnpm run build --if-present"));
+        assert!(!pnpm.contains("npm ci"));
+
+        // A custom build command overrides the default for either manager.
+        assert!(node_setup_section(NodePm::Pnpm, Some("pnpm compile")).contains("RUN pnpm compile"));
     }
 
     #[test]
