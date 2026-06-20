@@ -415,7 +415,7 @@ fn dockerfile_context_fit(dockerfile: &str, context_dir: &Path) -> DockerfileCon
 /// Workspace member globs declared in a package.json (npm/yarn workspaces).
 /// Handles both the array form and the `{ "packages": [...] }` object form.
 /// Empty when the field is absent.
-fn parse_workspaces(package_json: &str) -> Vec<String> {
+pub(crate) fn parse_workspaces(package_json: &str) -> Vec<String> {
     let Ok(pkg) = serde_json::from_str::<serde_json::Value>(package_json) else {
         return Vec::new();
     };
@@ -453,6 +453,54 @@ fn list_workspace_members(root: &Path, globs: &[String]) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// Whether `subdir` (repo-relative, e.g. "src/filesystem") is matched by one of the
+/// workspace globs. Supports the common `prefix/*` and `*` and literal forms.
+pub(crate) fn subdir_is_workspace_member(subdir: &str, globs: &[String]) -> bool {
+    let subdir = subdir.trim_matches('/');
+    globs.iter().any(|g| {
+        let g = g.trim_matches('/');
+        if let Some(prefix) = g.strip_suffix("/*") {
+            match subdir.strip_prefix(prefix) {
+                Some(rest) => {
+                    let rest = rest.trim_start_matches('/');
+                    !rest.is_empty() && !rest.contains('/')
+                }
+                None => false,
+            }
+        } else if g == "*" {
+            !subdir.is_empty() && !subdir.contains('/')
+        } else {
+            g == subdir
+        }
+    })
+}
+
+/// Rewrite an entry command so it works when the build context is the repo ROOT but
+/// the server lives in `subdir`. Handles `node <script> [args]` (the dominant TS-MCP
+/// shape) by prefixing the script path, and `npm <...>` via `--prefix`. Any other
+/// shape is returned unchanged (we can't safely rewrite it).
+pub(crate) fn prefix_entry_with_subdir(entry: &str, subdir: &str) -> String {
+    let subdir = subdir.trim_matches('/');
+    if subdir.is_empty() {
+        return entry.to_string();
+    }
+    let parts: Vec<&str> = entry.split_whitespace().collect();
+    match parts.as_slice() {
+        ["node", script, rest @ ..] if !script.starts_with('/') && !script.starts_with('-') => {
+            let mut out = format!("node {}/{}", subdir, script);
+            for r in rest {
+                out.push(' ');
+                out.push_str(r);
+            }
+            out
+        }
+        ["npm", rest @ ..] if !rest.is_empty() => {
+            format!("npm --prefix {} {}", subdir, rest.join(" "))
+        }
+        _ => entry.to_string(),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -549,7 +597,7 @@ impl ProjectStructure {
     ///
     /// This is the source of "auto-detection": it lets stdio servers deploy without an
     /// explicit entry command, and lets SSE servers stop assuming `index.js`.
-    fn detected_entry(&self, runtime: &str) -> Option<String> {
+    pub(crate) fn detected_entry(&self, runtime: &str) -> Option<String> {
         match runtime {
             "node" => self.node_entry.clone(),
             "python" => self
@@ -2383,5 +2431,37 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("src/git")).unwrap();
         let members = list_workspace_members(tmp.path(), &["src/*".to_string()]);
         assert_eq!(members, vec!["src/filesystem", "src/git"]);
+    }
+
+    // ---- strategy 3: workspace membership + entry prefixing ----
+
+    #[test]
+    fn subdir_membership() {
+        let ws = vec!["src/*".to_string()];
+        assert!(subdir_is_workspace_member("src/filesystem", &ws));
+        assert!(subdir_is_workspace_member("/src/filesystem/", &ws));
+        assert!(!subdir_is_workspace_member("src/filesystem/sub", &ws));
+        assert!(!subdir_is_workspace_member("packages/a", &ws));
+        assert!(subdir_is_workspace_member("a", &["*".to_string()]));
+        assert!(subdir_is_workspace_member("packages/a", &["packages/a".to_string()]));
+    }
+
+    #[test]
+    fn prefix_entry_node_and_npm() {
+        assert_eq!(
+            prefix_entry_with_subdir("node dist/index.js", "src/filesystem"),
+            "node src/filesystem/dist/index.js"
+        );
+        assert_eq!(
+            prefix_entry_with_subdir("node dist/index.js /tmp", "src/filesystem"),
+            "node src/filesystem/dist/index.js /tmp"
+        );
+        assert_eq!(
+            prefix_entry_with_subdir("npm start", "src/git"),
+            "npm --prefix src/git start"
+        );
+        // Unrewritable shapes pass through unchanged.
+        assert_eq!(prefix_entry_with_subdir("./server", "src/x"), "./server");
+        assert_eq!(prefix_entry_with_subdir("node dist/index.js", ""), "node dist/index.js");
     }
 }

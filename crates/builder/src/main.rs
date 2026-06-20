@@ -396,7 +396,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn handle_build_job(job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Result<(), Error> {
+async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Result<(), Error> {
     tracing::info!("Processing build job: {:?}", job.deployment_id);
 
     // Update deployment status to building
@@ -550,6 +550,42 @@ async fn handle_build_job(job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Resu
         canonical_subdir
     };
 
+    // Strategy 3: a member of an npm/yarn workspaces monorepo cannot be built from
+    // its own subdirectory — its tsconfig typically extends the repo root and its
+    // dependencies are hoisted to the root node_modules. When the target is such a
+    // member and the user did not pin an entry command, build from the repo ROOT and
+    // point the entry at the member's output (e.g. `node src/filesystem/dist/index.js`),
+    // detected from the member's own manifest. Otherwise keep the subdirectory context.
+    let mut build_context = actual_source_dir.clone();
+    if !job.root_directory.is_empty()
+        && job.root_directory != "."
+        && job.root_directory != "/"
+        && job.entry_command.is_none()
+    {
+        let clean_root_dir = job.root_directory.trim_start_matches('/').to_string();
+        let workspaces = std::fs::read_to_string(source_dir.join("package.json"))
+            .ok()
+            .map(|c| flyctl::parse_workspaces(&c))
+            .unwrap_or_default();
+        if flyctl::subdir_is_workspace_member(&clean_root_dir, &workspaces) {
+            let member = flyctl::detect_project_structure(&actual_source_dir).await;
+            if let Some(entry) = member.detected_entry(&job.runtime) {
+                let prefixed = flyctl::prefix_entry_with_subdir(&entry, &clean_root_dir);
+                log_to_db_and_ws(
+                    &ctx,
+                    job.deployment_id,
+                    format!(
+                        "Workspace monorepo member detected — building from repo root with entry `{}`",
+                        prefixed
+                    ),
+                )
+                .await;
+                job.entry_command = Some(prefixed);
+                build_context = source_dir.to_path_buf();
+            }
+        }
+    }
+
     // Get secrets for this server and decrypt them
     let encrypted_secrets = SecretRepository::list_by_server(&ctx.db, job.server_id)
         .await
@@ -610,7 +646,7 @@ async fn handle_build_job(job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> Resu
     let build_result = flyctl::build_and_deploy(
         &ctx.config,
         &job,
-        &actual_source_dir,
+        &build_context,
         &secrets,
         on_log,
     )
