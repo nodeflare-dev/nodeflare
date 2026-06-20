@@ -565,8 +565,9 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         let clean_root_dir = job.root_directory.trim_start_matches('/').to_string();
         let workspaces = flyctl::detect_workspace_globs(source_dir);
         if flyctl::subdir_is_workspace_member(&clean_root_dir, &workspaces) {
-            let member = flyctl::detect_project_structure(&actual_source_dir).await;
-            if let Some(entry) = member.detected_entry(&job.runtime) {
+            if let Some(entry) =
+                flyctl::detect_member_entry(source_dir, &actual_source_dir, &job.runtime).await
+            {
                 let prefixed = flyctl::prefix_entry_with_subdir(&entry, &clean_root_dir);
                 log_to_db_and_ws(
                     &ctx,

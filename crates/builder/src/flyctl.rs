@@ -553,10 +553,25 @@ pub(crate) fn subdir_is_workspace_member(subdir: &str, globs: &[String]) -> bool
     })
 }
 
+/// Startup entry for a workspace member, resolved with the workspace ROOT's package
+/// manager. For node, the pnpm/npm signal (lockfile, pnpm-workspace.yaml,
+/// packageManager) lives at the root, not in the member, so detecting it from the
+/// member would mislabel a pnpm member as npm. Non-node runtimes are runner-agnostic
+/// and fall back to the member's own detection.
+pub(crate) async fn detect_member_entry(root: &Path, member: &Path, runtime: &str) -> Option<String> {
+    if runtime == "node" {
+        let pm = detect_node_pm(root);
+        let content = std::fs::read_to_string(member.join("package.json")).ok()?;
+        return parse_node_entry(&content, pm);
+    }
+    detect_project_structure(member).await.detected_entry(runtime)
+}
+
 /// Rewrite an entry command so it works when the build context is the repo ROOT but
 /// the server lives in `subdir`. Handles `node <script> [args]` (the dominant TS-MCP
-/// shape) by prefixing the script path, and `npm <...>` via `--prefix`. Any other
-/// shape is returned unchanged (we can't safely rewrite it).
+/// shape) by prefixing the script path, `npm <...>` via `--prefix`, and `pnpm <...>`
+/// via `--filter ./<subdir>` (pnpm's workspace selector). Any other shape is returned
+/// unchanged (we can't safely rewrite it).
 pub(crate) fn prefix_entry_with_subdir(entry: &str, subdir: &str) -> String {
     let subdir = subdir.trim_matches('/');
     if subdir.is_empty() {
@@ -574,6 +589,9 @@ pub(crate) fn prefix_entry_with_subdir(entry: &str, subdir: &str) -> String {
         }
         ["npm", rest @ ..] if !rest.is_empty() => {
             format!("npm --prefix {} {}", subdir, rest.join(" "))
+        }
+        ["pnpm", rest @ ..] if !rest.is_empty() => {
+            format!("pnpm --filter ./{} {}", subdir, rest.join(" "))
         }
         _ => entry.to_string(),
     }
@@ -646,6 +664,14 @@ pub(crate) enum NodePm {
 }
 
 impl NodePm {
+    /// The CLI binary name (`npm` / `pnpm`).
+    fn cli(self) -> &'static str {
+        match self {
+            NodePm::Npm => "npm",
+            NodePm::Pnpm => "pnpm",
+        }
+    }
+
     /// The `run` prefix used to invoke package scripts (`npm run` / `pnpm run`).
     fn runner(self) -> &'static str {
         match self {
@@ -758,7 +784,7 @@ pub async fn detect_project_structure(source_dir: &Path) -> ProjectStructure {
     // Reads are best-effort: a malformed/absent manifest simply yields None.
     if structure.has_package_json {
         if let Ok(content) = std::fs::read_to_string(source_dir.join("package.json")) {
-            structure.node_entry = parse_node_entry(&content);
+            structure.node_entry = parse_node_entry(&content, structure.node_pm);
         }
     }
     if structure.has_pyproject {
@@ -888,13 +914,15 @@ fn parse_go_deps(go_mod: &str) -> Vec<String> {
 }
 
 /// Derive a Node start command from `package.json` contents.
-/// Priority: `scripts.start` (→ `npm start`) > `main` (→ `node <main>`) > `bin` (→ `node <path>`).
+/// Priority: `scripts.start` (→ `<pm> start`) > `main` (→ `node <main>`) > `bin` (→ `node <path>`).
 /// `scripts.start`/`main` are the conventional "run this app" entry; `bin` is the
 /// fallback that covers stdio CLI packages which only declare an executable.
-fn parse_node_entry(package_json: &str) -> Option<String> {
+/// `pm` selects the script runner so a pnpm project runs `pnpm start`, matching how
+/// its dependencies were installed (the `node <path>` forms are runner-agnostic).
+fn parse_node_entry(package_json: &str, pm: NodePm) -> Option<String> {
     let pkg: serde_json::Value = serde_json::from_str(package_json).ok()?;
 
-    // 1. An explicit `start` script — let npm run exactly what the project defined.
+    // 1. An explicit `start` script — let the package manager run what the project defined.
     if pkg
         .get("scripts")
         .and_then(|s| s.get("start"))
@@ -902,7 +930,7 @@ fn parse_node_entry(package_json: &str) -> Option<String> {
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false)
     {
-        return Some("npm start".to_string());
+        return Some(format!("{} start", pm.cli()));
     }
 
     // 2. `main` — the package's documented entry module.
@@ -2303,37 +2331,41 @@ mod tests {
     #[test]
     fn node_prefers_start_script() {
         let pkg = r#"{"scripts": {"start": "node dist/server.js"}, "main": "index.js"}"#;
-        assert_eq!(parse_node_entry(pkg).as_deref(), Some("npm start"));
+        assert_eq!(parse_node_entry(pkg, NodePm::Npm).as_deref(), Some("npm start"));
+        // pnpm projects run the start script with pnpm, matching how deps were installed.
+        assert_eq!(parse_node_entry(pkg, NodePm::Pnpm).as_deref(), Some("pnpm start"));
     }
 
     #[test]
     fn node_falls_back_to_main() {
         let pkg = r#"{"main": "dist/index.js"}"#;
-        assert_eq!(parse_node_entry(pkg).as_deref(), Some("node dist/index.js"));
+        // `node <path>` is runner-agnostic: same for npm and pnpm.
+        assert_eq!(parse_node_entry(pkg, NodePm::Npm).as_deref(), Some("node dist/index.js"));
+        assert_eq!(parse_node_entry(pkg, NodePm::Pnpm).as_deref(), Some("node dist/index.js"));
     }
 
     #[test]
     fn node_bin_string() {
         let pkg = r#"{"bin": "./cli.js"}"#;
-        assert_eq!(parse_node_entry(pkg).as_deref(), Some("node ./cli.js"));
+        assert_eq!(parse_node_entry(pkg, NodePm::Npm).as_deref(), Some("node ./cli.js"));
     }
 
     #[test]
     fn node_bin_object_prefers_package_name() {
         let pkg = r#"{"name": "my-mcp", "bin": {"other": "o.js", "my-mcp": "server.js"}}"#;
-        assert_eq!(parse_node_entry(pkg).as_deref(), Some("node server.js"));
+        assert_eq!(parse_node_entry(pkg, NodePm::Npm).as_deref(), Some("node server.js"));
     }
 
     #[test]
     fn node_empty_start_skipped() {
         let pkg = r#"{"scripts": {"start": "  "}, "main": "index.js"}"#;
-        assert_eq!(parse_node_entry(pkg).as_deref(), Some("node index.js"));
+        assert_eq!(parse_node_entry(pkg, NodePm::Npm).as_deref(), Some("node index.js"));
     }
 
     #[test]
     fn node_no_signal_returns_none() {
-        assert_eq!(parse_node_entry(r#"{"name": "x"}"#), None);
-        assert_eq!(parse_node_entry("not json"), None);
+        assert_eq!(parse_node_entry(r#"{"name": "x"}"#, NodePm::Npm), None);
+        assert_eq!(parse_node_entry("not json", NodePm::Npm), None);
     }
 
     // ---- Python: pyproject [project.scripts] ----
@@ -2782,6 +2814,11 @@ mod tests {
         assert_eq!(
             prefix_entry_with_subdir("npm start", "src/git"),
             "npm --prefix src/git start"
+        );
+        // pnpm workspace member: run via pnpm's path filter.
+        assert_eq!(
+            prefix_entry_with_subdir("pnpm start", "packages/mcp"),
+            "pnpm --filter ./packages/mcp start"
         );
         // Unrewritable shapes pass through unchanged.
         assert_eq!(prefix_entry_with_subdir("./server", "src/x"), "./server");
