@@ -659,7 +659,7 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
     // through normal failure reporting instead of being shown as "succeeded".
     let build_result = match build_result {
         Ok(deploy_result) => {
-            match flyctl::verify_mcp_initialize(&deploy_result.endpoint_url, "/mcp", &on_log).await {
+            match flyctl::verify_mcp_initialize(&deploy_result.endpoint_url, &job.mcp_path, &on_log).await {
                 flyctl::ProbeOutcome::Verified => Ok(deploy_result),
                 flyctl::ProbeOutcome::Inconclusive(detail) => {
                     on_log(&format!(
