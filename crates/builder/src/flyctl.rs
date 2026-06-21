@@ -608,6 +608,9 @@ struct MachineInfo {
 pub struct DeployResult {
     pub endpoint_url: String,
     pub machine_id: Option<String>,
+    /// Fly app name (e.g. "mcp-ef62e1a4"), used to fetch the server's own logs when
+    /// post-deploy verification fails.
+    pub app_name: String,
 }
 
 /// Generate fly.toml content for a server
@@ -2157,14 +2160,20 @@ pub async fn build_and_deploy(
     }
 
     if !deploy_output.status.success() {
-        // Sanitize stderr to prevent leaking secret values in logs
+        // Sanitize stderr to prevent leaking secret values in logs.
         let sanitized_stderr = sanitize_log_output(&stderr, secrets);
+        // The full log is already streamed line-by-line to the deployment logs; the
+        // error *message* shows only the meaningful diagnostic lines so the real cause
+        // (e.g. an `npm error` or `Cannot read file '../../tsconfig.json'`) isn't buried
+        // under noise like a `tsc --help` dump.
         for line in sanitized_stderr.lines() {
             if !line.trim().is_empty() {
                 on_log(&format!("ERROR: {}", line));
             }
         }
-        return Err(anyhow::anyhow!("Deploy failed: {}", sanitized_stderr));
+        let summary = extract_error_lines(&sanitized_stderr, 15);
+        let message = if summary.is_empty() { sanitized_stderr } else { summary };
+        return Err(anyhow::anyhow!("Build failed:\n{}", message));
     }
 
     on_log("Deployment successful!");
@@ -2179,6 +2188,7 @@ pub async fn build_and_deploy(
     Ok(DeployResult {
         endpoint_url,
         machine_id,
+        app_name,
     })
 }
 
@@ -2203,6 +2213,102 @@ async fn get_machine_id(config: &AppConfig, app_name: &str) -> Result<String> {
         .next()
         .map(|m| format!("{}:{}", app_name, m.id))
         .ok_or_else(|| anyhow::anyhow!("No machines found"))
+}
+
+// ============================================================================
+// Surfacing the real failure reason
+//
+// Build and runtime failures produce large, noisy logs (a `tsc --help` dump on a
+// build error; a crash-loop repeating the same stack on a runtime error). Rather
+// than enumerate specific failure patterns, we surface ground truth: pull the lines
+// that actually carry a diagnostic, de-duplicate them, and show those. This stays
+// correct for any repo/runtime — new failure shapes don't need new code.
+// ============================================================================
+
+/// Strip ANSI/VT escape sequences (Fly logs are colorized) so the message is clean.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // Consume up to the final byte of the escape sequence (a letter for CSI).
+            while let Some(n) = chars.next() {
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// De-duplication key for a log line: strips a leading ISO-8601 timestamp token (a
+/// universal log convention) so the same error emitted repeatedly — e.g. once per
+/// crash-loop iteration, each with a different timestamp — collapses to one entry.
+fn dedup_key(line: &str) -> &str {
+    let b = line.as_bytes();
+    let looks_like_ts = b.len() > 20
+        && b[..4].iter().all(u8::is_ascii_digit)
+        && b[4] == b'-'
+        && b.get(10) == Some(&b'T');
+    if looks_like_ts {
+        if let Some(sp) = line.find(' ') {
+            return line[sp + 1..].trim_start();
+        }
+    }
+    line
+}
+
+/// Pull the meaningful diagnostic lines out of a noisy build/runtime log, keeping at
+/// most `max_lines` of them (the tail — the decisive error is usually last). Lines
+/// are matched by generic error markers and de-duplicated so a crash-loop or repeated
+/// stack collapses to its distinct lines.
+pub(crate) fn extract_error_lines(log: &str, max_lines: usize) -> String {
+    const MARKERS: &[&str] = &[
+        "error", "fatal", "panic", "exception", "traceback",
+        "cannot find", "cannot read", "not found", "no such file",
+        "did not complete", "exit code", "exited with", "failed to",
+        "module_not_found", "modulenotfounderror", "permission denied",
+    ];
+    let stripped = strip_ansi(log);
+    let mut seen = std::collections::HashSet::new();
+    let mut lines: Vec<String> = Vec::new();
+    for raw in stripped.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let lower = line.to_lowercase();
+        if MARKERS.iter().any(|m| lower.contains(m)) && seen.insert(dedup_key(line).to_string()) {
+            lines.push(line.to_string());
+        }
+    }
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+/// Best-effort fetch of a deployed app's recent logs (the builder image already ships
+/// `flyctl`). Used to surface why a server failed its post-deploy check. Returns None
+/// on any error or timeout — logs are an enrichment, never required.
+pub(crate) async fn fetch_app_logs(config: &AppConfig, app_name: &str) -> Option<String> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        Command::new("flyctl")
+            .args(["logs", "-a", app_name, "--no-tail"])
+            .env("FLY_API_TOKEN", &config.flyio.api_token)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text.into_owned())
+    }
 }
 
 // ============================================================================
@@ -2799,6 +2905,46 @@ mod tests {
         let out = snippet(&s);
         assert!(out.ends_with('…'));
         assert!(out.chars().count() <= 201);
+    }
+
+    #[test]
+    fn strip_ansi_removes_escapes() {
+        assert_eq!(strip_ansi("\u{1b}[32mhello\u{1b}[0m world"), "hello world");
+        assert_eq!(strip_ansi("plain"), "plain");
+    }
+
+    #[test]
+    fn extract_error_lines_cuts_through_noise() {
+        // A tsc --help dump (no error markers) followed by the real npm error.
+        let log = "\
+--outDir
+Specify an output folder for all emitted files.
+type: boolean
+default: false
+npm error code 1
+npm error command sh -c npm run build
+npm error path /app
+process \"/bin/sh -c npm install\" did not complete successfully: exit code: 1";
+        let out = extract_error_lines(log, 15);
+        assert!(out.contains("npm error code 1"));
+        assert!(out.contains("did not complete successfully"));
+        // The help-listing noise is dropped.
+        assert!(!out.contains("Specify an output folder"));
+        assert!(!out.contains("type: boolean"));
+    }
+
+    #[test]
+    fn extract_error_lines_dedups_crash_loop() {
+        // A crash-loop repeats the same lines; they collapse to the distinct ones.
+        let log = "\
+[Adapter] MCP process exited with code 1, signal null
+Error: Cannot find module '/app/dist/index.js'
+[Adapter] MCP process exited with code 1, signal null
+Error: Cannot find module '/app/dist/index.js'
+[Adapter] MCP process exited with code 1, signal null";
+        let out = extract_error_lines(log, 12);
+        assert_eq!(out.matches("Cannot find module").count(), 1);
+        assert_eq!(out.matches("MCP process exited").count(), 1);
     }
 
     #[test]
