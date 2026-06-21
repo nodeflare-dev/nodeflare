@@ -565,8 +565,9 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         let clean_root_dir = job.root_directory.trim_start_matches('/').to_string();
         let workspaces = flyctl::detect_workspace_globs(source_dir);
         if flyctl::subdir_is_workspace_member(&clean_root_dir, &workspaces) {
-            let member = flyctl::detect_project_structure(&actual_source_dir).await;
-            if let Some(entry) = member.detected_entry(&job.runtime) {
+            if let Some(entry) =
+                flyctl::detect_member_entry(source_dir, &actual_source_dir, &job.runtime).await
+            {
                 let prefixed = flyctl::prefix_entry_with_subdir(&entry, &clean_root_dir);
                 log_to_db_and_ws(
                     &ctx,
@@ -665,12 +666,30 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
                     ));
                     Ok(deploy_result)
                 }
-                flyctl::ProbeOutcome::Broken(detail) => Err(anyhow::anyhow!(
-                    "Deployment reached Fly.io but the MCP server did not start ({}). \
-                    This is usually a wrong startup command or missing build output — \
-                    check the server logs.",
-                    detail
-                )),
+                flyctl::ProbeOutcome::Broken(detail) => {
+                    // Surface the real reason: the adapter's 500 only says the child
+                    // exited, so fetch the server's own logs and show the actual error
+                    // (e.g. `Cannot find module '/app/dist/index.js'`) instead of a
+                    // generic "check the server logs".
+                    let server_logs = flyctl::fetch_app_logs(&ctx.config, &deploy_result.app_name)
+                        .await
+                        .map(|l| flyctl::extract_error_lines(&l, 12))
+                        .filter(|s| !s.is_empty());
+                    let message = match server_logs {
+                        Some(logs) => format!(
+                            "Deployment reached Fly.io but the MCP server did not start. \
+                            This is usually a wrong startup command or missing build output.\n\n\
+                            Server error:\n{}",
+                            logs
+                        ),
+                        None => format!(
+                            "Deployment reached Fly.io but the MCP server did not start \
+                            ({}). This is usually a wrong startup command or missing build output.",
+                            detail
+                        ),
+                    };
+                    Err(anyhow::anyhow!(message))
+                }
             }
         }
         Err(e) => Err(e),
