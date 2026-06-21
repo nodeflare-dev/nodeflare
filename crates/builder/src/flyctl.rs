@@ -2192,6 +2192,26 @@ pub async fn build_and_deploy(
     })
 }
 
+/// Destroy a Fly.io app via flyctl. Idempotent: a missing app is treated as success,
+/// so retries and double-deletes are safe.
+pub(crate) async fn destroy_app(config: &AppConfig, app_name: &str) -> Result<()> {
+    let output = Command::new("flyctl")
+        .args(["apps", "destroy", app_name, "--yes"])
+        .env("FLY_API_TOKEN", &config.flyio.api_token)
+        .output()
+        .await
+        .context("Failed to run flyctl apps destroy")?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lower = stderr.to_lowercase();
+    if lower.contains("not found") || lower.contains("could not find") || lower.contains("does not exist") {
+        return Ok(()); // already gone — idempotent
+    }
+    Err(anyhow::anyhow!("flyctl apps destroy {} failed: {}", app_name, stderr.trim()))
+}
+
 /// Get the machine ID for an app from Fly.io API
 async fn get_machine_id(config: &AppConfig, app_name: &str) -> Result<String> {
     let client = reqwest::Client::new();

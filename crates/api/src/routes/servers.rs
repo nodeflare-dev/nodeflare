@@ -726,7 +726,8 @@ pub async fn delete(
     // Delete from database first (primary operation)
     ServerRepository::delete(&state.db, path.server_id).await?;
 
-    // Destroy Fly.io app (best effort - don't fail if this fails)
+    // Tear down the Fly.io app via a durable, retrying job so a transient Fly error
+    // can't leave an orphaned app behind (the old inline best-effort destroy did).
     // App name format: mcp-{first_part_of_uuid}
     let server_id_str = path.server_id.to_string();
     let app_name = format!(
@@ -737,22 +738,21 @@ pub async fn delete(
             .unwrap_or(&server_id_str[..8.min(server_id_str.len())])
     );
 
-    if let Some(ref fly_runtime) = state.fly_runtime {
-        if let Err(e) = fly_runtime.destroy_app(&app_name).await {
-            // Log the error but don't fail the request
-            // User can manually clean up or we can add a periodic cleanup job later
-            tracing::warn!(
-                "Failed to destroy Fly.io app {} for server {}: {}",
-                app_name,
-                path.server_id,
-                e
-            );
+    let destroy_job = mcp_queue::DestroyJob {
+        server_id: path.server_id,
+        app_name: app_name.clone(),
+    };
+    if let Err(e) = state.job_queue.push_destroy_job(destroy_job).await {
+        // Queue is down — fall back to an inline destroy so we still try right now.
+        tracing::warn!("Failed to enqueue destroy job for {}: {}; trying inline", app_name, e);
+        if let Some(ref fly_runtime) = state.fly_runtime {
+            if let Err(e) = fly_runtime.destroy_app(&app_name).await {
+                tracing::warn!(
+                    "Inline destroy of Fly.io app {} for server {} also failed: {}",
+                    app_name, path.server_id, e
+                );
+            }
         }
-    } else {
-        tracing::warn!(
-            "Fly.io runtime not configured, skipping app destruction for {}",
-            app_name
-        );
     }
 
     Ok(StatusCode::NO_CONTENT)
