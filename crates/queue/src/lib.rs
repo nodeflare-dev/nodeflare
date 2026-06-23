@@ -83,6 +83,15 @@ pub struct CleanupJob {
     pub container_id: String,
 }
 
+/// Destroy job - reliably tear down a deleted server's Fly.io app. Enqueued when a
+/// server is deleted so the teardown survives transient Fly errors (the worker
+/// retries, and destroying a missing app is a no-op), preventing orphaned apps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DestroyJob {
+    pub server_id: Uuid,
+    pub app_name: String,
+}
+
 /// Log cleanup job - for removing old request logs
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogCleanupJob {
@@ -107,6 +116,7 @@ const KEEPALIVE_INTERVAL_SECS: u64 = 300;
 pub struct JobQueue {
     build_storage: RedisStorage<BuildJob>,
     deploy_storage: RedisStorage<DeployJob>,
+    destroy_storage: RedisStorage<DestroyJob>,
     conn: ConnectionManager,
 }
 
@@ -121,13 +131,16 @@ impl JobQueue {
         // Use explicit namespaces to ensure API and Builder use the same keys
         let build_config = Config::default().set_namespace("build_jobs");
         let deploy_config = Config::default().set_namespace("deploy_jobs");
+        let destroy_config = Config::default().set_namespace("destroy_jobs");
 
         let build_storage = RedisStorage::new_with_config(conn.clone(), build_config);
         let deploy_storage = RedisStorage::new_with_config(conn.clone(), deploy_config);
+        let destroy_storage = RedisStorage::new_with_config(conn.clone(), destroy_config);
 
         Ok(Self {
             build_storage,
             deploy_storage,
+            destroy_storage,
             conn,
         })
     }
@@ -176,6 +189,17 @@ impl JobQueue {
             .push(job)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to push deploy job: {}", e))?;
+        Ok(())
+    }
+
+    /// Push a destroy job to tear down a deleted server's Fly.io app.
+    pub async fn push_destroy_job(&self, job: DestroyJob) -> anyhow::Result<()> {
+        use apalis::prelude::Storage;
+        self.destroy_storage
+            .clone()
+            .push(job)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to push destroy job: {}", e))?;
         Ok(())
     }
 }

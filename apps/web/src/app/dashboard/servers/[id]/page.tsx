@@ -254,26 +254,39 @@ export default function ServerDetailPage() {
     },
   });
 
+  const SERVERS_LIST_KEY = ['servers-list'] as const;
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/workspaces/${workspaceId}/servers/${serverId}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['servers'] });
+    // Optimistic: drop the server from the list and navigate away immediately, so the
+    // UI feels instant; the actual teardown (and Fly app destruction) runs in the
+    // background. Roll back and surface a toast if the delete fails.
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: SERVERS_LIST_KEY });
+      const previous = queryClient.getQueryData<Array<{ id: string }>>(SERVERS_LIST_KEY);
+      queryClient.setQueryData<Array<{ id: string }>>(SERVERS_LIST_KEY, (old) =>
+        old?.filter((s) => s.id !== serverId)
+      );
       router.push('/dashboard/servers');
+      return { previous };
     },
-    onError: (error: any) => {
+    onError: (error: any, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(SERVERS_LIST_KEY, context.previous);
+      }
+      let message = error?.message || tCommon('error');
       const errorCode = error?.code;
       if (errorCode) {
         try {
           const translated = tApiErrors(errorCode);
-          if (translated && translated !== errorCode) {
-            setDeleteError(translated);
-            return;
-          }
+          if (translated && translated !== errorCode) message = translated;
         } catch {
           // Translation not found
         }
       }
-      setDeleteError(error?.message || tCommon('error'));
+      toast.error(message);
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: SERVERS_LIST_KEY });
     },
   });
 

@@ -7,7 +7,7 @@ use mcp_common::{types::LogStream, AppConfig, EventPublisher};
 use mcp_db::{DeploymentRepository, ErrorHintRepository, NotificationSettingsRepository, RegionStatus, SecretRepository, ServerRegionRepository, ServerRepository, UpdateDeployment, UpdateServerRegion, UserPreferencesRepository, UserRepository, WorkspaceRepository};
 use mcp_email::EmailService;
 use mcp_github::GitHubApp;
-use mcp_queue::{BuildJob, DeployJob, JobQueue};
+use mcp_queue::{BuildJob, DeployJob, DestroyJob, JobQueue};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -279,6 +279,9 @@ async fn main() -> Result<()> {
     let deploy_config = apalis_redis::Config::default()
         .set_namespace("deploy_jobs")
         .set_poll_interval(std::time::Duration::from_secs(30));
+    let destroy_config = apalis_redis::Config::default()
+        .set_namespace("destroy_jobs")
+        .set_poll_interval(std::time::Duration::from_secs(30));
 
     // Log the key names that apalis-redis will use
     tracing::info!("Build queue config: namespace={:?}", build_config.get_namespace());
@@ -290,11 +293,15 @@ async fn main() -> Result<()> {
         build_config,
     );
     let deploy_storage = RedisStorage::<DeployJob>::new_with_config(
-        redis_conn,
+        redis_conn.clone(),
         deploy_config,
     );
+    let destroy_storage = RedisStorage::<DestroyJob>::new_with_config(
+        redis_conn,
+        destroy_config,
+    );
 
-    tracing::info!("Connected to job queue, created BuildJob and DeployJob storage instances");
+    tracing::info!("Connected to job queue, created BuildJob, DeployJob and DestroyJob storage instances");
 
     // Create workers
     let build_worker = WorkerBuilder::new("build-worker")
@@ -306,6 +313,11 @@ async fn main() -> Result<()> {
         .data(context.clone())
         .backend(deploy_storage)
         .build_fn(handle_deploy_job);
+
+    let destroy_worker = WorkerBuilder::new("destroy-worker")
+        .data(context.clone())
+        .backend(destroy_storage)
+        .build_fn(handle_destroy_job);
 
     // Start health check HTTP server in background (required for Fly.io to keep machine running)
     let health_port = std::env::var("HEALTH_PORT").unwrap_or_else(|_| "8080".to_string());
@@ -378,7 +390,8 @@ async fn main() -> Result<()> {
     // Run workers - this blocks forever, polling for jobs
     let monitor = Monitor::new()
         .register(build_worker)
-        .register(deploy_worker);
+        .register(deploy_worker)
+        .register(destroy_worker);
 
     tracing::info!("Monitor created with 2 workers, calling run()...");
 
@@ -1288,4 +1301,40 @@ async fn handle_deploy_job(job: DeployJob, ctx: Data<Arc<BuilderContext>>) -> Re
     }
 
     Ok(())
+}
+
+/// Tear down a deleted server's Fly.io app. Retries transient failures with backoff;
+/// destroying a missing app is a no-op, so this converges to "app is gone".
+async fn handle_destroy_job(job: DestroyJob, ctx: Data<Arc<BuilderContext>>) -> Result<(), Error> {
+    tracing::info!("Processing destroy job: app={}, server={}", job.app_name, job.server_id);
+
+    const ATTEMPTS: usize = 5;
+    let mut last_err = None;
+    for attempt in 1..=ATTEMPTS {
+        match flyctl::destroy_app(&ctx.config, &job.app_name).await {
+            Ok(()) => {
+                tracing::info!("Fly.io app {} destroyed (server {})", job.app_name, job.server_id);
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "destroy_app {} attempt {}/{} failed: {}",
+                    job.app_name, attempt, ATTEMPTS, e
+                );
+                last_err = Some(e);
+                if attempt < ATTEMPTS {
+                    // Backoff: 5s, 10s, 20s, 30s.
+                    let secs = (5u64 << (attempt - 1)).min(30);
+                    tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                }
+            }
+        }
+    }
+    // Exhausted retries — return Err so the queue can re-attempt later rather than
+    // silently leaving an orphan.
+    Err(Error::Failed(Arc::new(
+        last_err
+            .unwrap_or_else(|| anyhow::anyhow!("destroy failed"))
+            .into(),
+    )))
 }
