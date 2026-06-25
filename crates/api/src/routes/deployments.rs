@@ -231,6 +231,7 @@ pub async fn rollback(
         transport: server.transport,
         entry_command: server.entry_command,
         build_command: server.build_command,
+        memory_mb: server.memory_mb,
     };
 
     state

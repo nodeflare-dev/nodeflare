@@ -7,6 +7,7 @@ import { AlertCircle, CreditCard, X, ArrowLeft, ChevronLeft, ChevronRight, Clock
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
+import { UsageCard } from '@/components/billing/usage-card';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -371,6 +372,11 @@ export default function BillingPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Memory-time usage this month */}
+      <div className="mb-4 sm:mb-6">
+        <UsageCard workspaceId={currentWorkspace?.id} />
       </div>
 
       {/* Two Column Layout: Current Plan | Invoice Calendar */}

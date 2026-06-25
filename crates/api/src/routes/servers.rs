@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use chrono::Datelike;
-use mcp_billing::Plan as BillingPlan;
+use mcp_billing::{validate_memory_choice, MemoryChoiceError, Plan as BillingPlan, MEMORY_LADDER_MB};
 use mcp_common::types::{CreateServerRequest, PaginationParams, ServerResponse, ServerMinimalResponse, ServerBasicResponse, ServerListResponse, UpdateServerRequest};
 use mcp_db::{CreateDeployment, CreateServer, CreateServerRegion, DeploymentRepository, ServerRegionRepository, ServerRepository, UpdateServer, WorkspaceRepository};
 use serde_json::json;
@@ -19,6 +19,35 @@ use crate::state::AppState;
 pub struct ServerPath {
     pub workspace_id: Uuid,
     pub server_id: Uuid,
+}
+
+/// Validate a user-selected per-server memory size against the allowed ladder and
+/// the workspace plan's ceiling, turning a rejection into a client-facing error.
+fn check_memory_choice(
+    memory_mb: Option<i32>,
+    limits: &mcp_billing::PlanLimits,
+    plan: &str,
+) -> Result<(), AppError> {
+    match validate_memory_choice(memory_mb.map(|m| m as u32), limits) {
+        Ok(()) => Ok(()),
+        Err(MemoryChoiceError::NotOnLadder) => Err(AppError::bad_request(
+            "INVALID_MEMORY",
+            &format!("Memory must be one of {:?} MB.", MEMORY_LADDER_MB),
+        )),
+        Err(MemoryChoiceError::ExceedsPlan { ceiling_mb }) => Err(AppError::payment_required(
+            "MEMORY_LIMIT_REACHED",
+            &format!(
+                "Your {} plan allows up to {} MB of memory per server. Upgrade to select a larger size.",
+                plan, ceiling_mb
+            ),
+        )
+        .with_details(json!({
+            "requested_mb": memory_mb,
+            "max_allowed_mb": ceiling_mb,
+            "plan": plan,
+            "upgrade_url": "/dashboard/billing"
+        }))),
+    }
 }
 
 /// List all servers across all workspaces the user has access to
@@ -58,6 +87,7 @@ pub async fn list_all(
                 entry_command: s.entry_command,
                 build_command: s.build_command,
                 auth_enabled: s.auth_enabled,
+                memory_mb: s.memory_mb,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             }
@@ -192,6 +222,7 @@ pub async fn list(
                 entry_command: s.entry_command,
                 build_command: s.build_command,
                 auth_enabled: s.auth_enabled,
+                memory_mb: s.memory_mb,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             }
@@ -265,6 +296,9 @@ pub async fn create(
         _ => BillingPlan::Free,
     };
     let limits = billing_plan.limits();
+
+    // Reject a memory size the plan can't grant before we do any work.
+    check_memory_choice(body.memory_mb, &limits, &workspace.plan)?;
 
     let current_server_count = ServerRepository::count_by_workspace(&state.db, workspace_id)
         .await
@@ -389,6 +423,7 @@ pub async fn create(
             entry_command: body.entry_command.clone(),
             build_command: body.build_command.clone(),
             auth_enabled: body.auth_enabled.unwrap_or(true),
+            memory_mb: body.memory_mb,
         },
     )
     .await
@@ -580,6 +615,7 @@ pub async fn create(
         entry_command: server.entry_command,
         build_command: server.build_command,
         auth_enabled: server.auth_enabled,
+        memory_mb: server.memory_mb,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -626,6 +662,7 @@ pub async fn get(
         entry_command: server.entry_command,
         build_command: server.build_command,
         auth_enabled: server.auth_enabled,
+        memory_mb: server.memory_mb,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -647,6 +684,24 @@ pub async fn update(
 
     if existing.workspace_id != path.workspace_id {
         return Err(AppError::not_found("Server"));
+    }
+
+    // Validate a memory change against the workspace plan before applying it.
+    if body.memory_mb.is_some() {
+        let workspace = WorkspaceRepository::find_by_id(&state.db, path.workspace_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Database error fetching workspace: {}", e);
+                AppError::internal("Failed to fetch workspace")
+            })?
+            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+        let billing_plan = match workspace.plan.as_str() {
+            "pro" => BillingPlan::Pro,
+            "team" => BillingPlan::Team,
+            "enterprise" => BillingPlan::Enterprise,
+            _ => BillingPlan::Free,
+        };
+        check_memory_choice(body.memory_mb, &billing_plan.limits(), &workspace.plan)?;
     }
 
     tracing::info!(
@@ -672,6 +727,7 @@ pub async fn update(
             entry_command: body.entry_command,
             build_command: body.build_command,
             auth_enabled: body.auth_enabled,
+            memory_mb: body.memory_mb,
         },
     )
     .await?;
@@ -701,6 +757,7 @@ pub async fn update(
         entry_command: server.entry_command,
         build_command: server.build_command,
         auth_enabled: server.auth_enabled,
+        memory_mb: server.memory_mb,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -1004,6 +1061,7 @@ pub async fn stop(
         entry_command: server.entry_command,
         build_command: server.build_command,
         auth_enabled: server.auth_enabled,
+        memory_mb: server.memory_mb,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))

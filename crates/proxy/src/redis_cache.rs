@@ -117,6 +117,7 @@ impl CachedServer {
             entry_command: None,
             build_command: None,
             auth_enabled: self.auth_enabled,
+            memory_mb: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
         }

@@ -82,6 +82,26 @@ async fn get_user_locale_for_server(pool: &mcp_db::DbPool, server_id: uuid::Uuid
     locale.unwrap_or_else(|| "en".to_string())
 }
 
+/// The memory ceiling (MB) the server's workspace plan allows. Looked up at deploy
+/// time so a plan downgrade is respected. Falls back to the Free ceiling (smallest)
+/// if the plan can't be resolved — never hand out more memory than we can confirm.
+async fn plan_memory_ceiling_mb(pool: &mcp_db::DbPool, server_id: uuid::Uuid) -> u64 {
+    use mcp_billing::Plan;
+    let ceiling = async {
+        let server = ServerRepository::find_by_id(pool, server_id).await.ok()??;
+        let workspace = WorkspaceRepository::find_by_id(pool, server.workspace_id).await.ok()??;
+        let plan = match workspace.plan.as_str() {
+            "pro" => Plan::Pro,
+            "team" => Plan::Team,
+            "enterprise" => Plan::Enterprise,
+            _ => Plan::Free,
+        };
+        Some(plan.limits().max_memory_mb as u64)
+    }
+    .await;
+    ceiling.unwrap_or_else(|| mcp_billing::PlanLimits::default().max_memory_mb as u64)
+}
+
 use std::sync::OnceLock;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
@@ -654,11 +674,13 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         });
     };
 
+    let plan_memory_ceiling = plan_memory_ceiling_mb(&ctx.db, job.server_id).await;
     let build_result = flyctl::build_and_deploy(
         &ctx.config,
         &job,
         &build_context,
         &secrets,
+        plan_memory_ceiling,
         on_log.clone(),
     )
     .await;
@@ -691,13 +713,15 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
                     let message = match server_logs {
                         Some(logs) => format!(
                             "Deployment reached Fly.io but the MCP server did not start. \
-                            This is usually a wrong startup command or missing build output.\n\n\
+                            This is usually a wrong startup command, missing build output, \
+                            or the server running out of memory.\n\n\
                             Server error:\n{}",
                             logs
                         ),
                         None => format!(
                             "Deployment reached Fly.io but the MCP server did not start \
-                            ({}). This is usually a wrong startup command or missing build output.",
+                            ({}). This is usually a wrong startup command, missing build output, \
+                            or the server running out of memory.",
                             detail
                         ),
                     };

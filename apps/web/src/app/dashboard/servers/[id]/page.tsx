@@ -27,6 +27,8 @@ import {
   Legend,
 } from 'recharts';
 import { BuildLogsPanel } from '@/components/deployment/build-logs-panel';
+import { MemorySelect } from '@/components/servers/memory-select';
+import { DEFAULT_MEMORY_MB } from '@/lib/plans';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -1252,7 +1254,20 @@ function SettingsTab({
   const [entryCommand, setEntryCommand] = useState(server.entry_command || '');
   const [buildCommand, setBuildCommand] = useState(server.build_command || '');
   const [authEnabled, setAuthEnabled] = useState(server.auth_enabled ?? true);
+  const [memoryMb, setMemoryMb] = useState(server.memory_mb ?? DEFAULT_MEMORY_MB);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Plan limits cap which memory sizes are selectable (Free is limited to 256MB).
+  const { data: plans } = useQuery<{ plan: string; limits: { max_memory_mb: number } }[]>({
+    queryKey: ['billing-plans'],
+    queryFn: () => api.get('/billing/plans'),
+  });
+  const { data: workspaces } = useQuery<{ id: string; plan?: string }[]>({
+    queryKey: ['workspaces'],
+    queryFn: () => api.get('/workspaces'),
+  });
+  const currentPlan = workspaces?.find((w) => w.id === workspaceId)?.plan || 'free';
+  const maxMemoryMb = plans?.find((p) => p.plan === currentPlan)?.limits.max_memory_mb ?? 256;
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -1268,6 +1283,7 @@ function SettingsTab({
         entry_command: entryCommand || undefined,
         build_command: buildCommand || undefined,
         auth_enabled: authEnabled,
+        memory_mb: memoryMb,
       });
       queryClient.invalidateQueries({ queryKey: ['servers'] });
     } catch {
@@ -1358,6 +1374,8 @@ function SettingsTab({
             className="bg-white font-mono"
           />
         </div>
+
+        <MemorySelect value={memoryMb} onChange={setMemoryMb} maxMemoryMb={maxMemoryMb} />
 
         <div>
           <Label className="block mb-2">{t('create.visibility')}</Label>

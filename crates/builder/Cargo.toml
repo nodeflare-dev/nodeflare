@@ -11,6 +11,7 @@ path = "src/main.rs"
 mcp-common = { path = "../common" }
 mcp-db = { path = "../db" }
 mcp-queue = { path = "../queue" }
+mcp-billing = { path = "../billing" }
 mcp-auth = { path = "../auth" }
 mcp-github = { path = "../github" }
 mcp-email = { path = "../email" }

@@ -17,11 +17,19 @@ export interface PlanLimits {
   max_deployments_per_month: number;
   max_requests_per_month: number;
   max_team_members: number;
+  /** Per-server machine memory ceiling (MB). Free=256, paid=2048. */
+  max_memory_mb: number;
   log_retention_days: number;
   custom_domains: boolean;
   priority_support: boolean;
   sso_enabled: boolean;
 }
+
+/** Allowed per-server memory sizes (MB), smallest first. Mirrors backend MEMORY_LADDER_MB. */
+export const MEMORY_LADDER_MB = [256, 512, 1024, 2048] as const;
+
+/** Default size when none is chosen (smallest rung). */
+export const DEFAULT_MEMORY_MB = 256;
 
 export interface PlanDefinition {
   plan: 'free' | 'pro' | 'team' | 'enterprise';
@@ -47,6 +55,7 @@ export const PLANS: PlanDefinition[] = [
       max_deployments_per_month: 50,
       max_requests_per_month: 10_000,
       max_team_members: 1,
+      max_memory_mb: 256,
       log_retention_days: 7,
       custom_domains: false,
       priority_support: false,
@@ -71,6 +80,7 @@ export const PLANS: PlanDefinition[] = [
       max_deployments_per_month: 500,
       max_requests_per_month: 500_000,
       max_team_members: 1,
+      max_memory_mb: 2048,
       log_retention_days: 30,
       custom_domains: true,
       priority_support: false,
@@ -96,6 +106,7 @@ export const PLANS: PlanDefinition[] = [
       max_deployments_per_month: 2000,
       max_requests_per_month: 5_000_000,
       max_team_members: 10,
+      max_memory_mb: 2048,
       log_retention_days: 90,
       custom_domains: true,
       priority_support: true,
@@ -124,6 +135,7 @@ export const PLANS: PlanDefinition[] = [
       max_deployments_per_month: 100_000, // 100K deployments/month
       max_requests_per_month: 1_000_000_000, // 1B requests/month
       max_team_members: 1_000,          // 1K team members
+      max_memory_mb: 2048,              // ceiling = ladder max (raise once metered)
       log_retention_days: 365,
       custom_domains: true,
       priority_support: true,

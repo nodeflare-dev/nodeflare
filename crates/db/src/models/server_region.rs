@@ -80,6 +80,8 @@ pub struct RegionUsage {
     pub period_start: NaiveDate,
     pub period_end: NaiveDate,
     pub active_hours: i32,
+    /// Memory-weighted active minutes (sum of memory_gb * sample_minutes). GB-hours = gb_minutes / 60.
+    pub gb_minutes: f64,
     pub reported_to_stripe: bool,
     pub stripe_usage_record_id: Option<String>,
     pub created_at: DateTime<Utc>,

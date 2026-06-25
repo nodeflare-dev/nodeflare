@@ -67,6 +67,37 @@ impl FlyioRuntime {
         Ok(())
     }
 
+    /// Provisioned memory (MB) of every *started* machine in an app. Used by the usage
+    /// sampler: billing follows actual running machines, so it naturally captures HA
+    /// replicas (2 started machines = 2x) and any detection-driven memory bump, and bills
+    /// nothing while auto-stop has the app idle. A missing app yields an empty list.
+    pub async fn list_started_machine_memory_mb(&self, app_name: &str) -> Result<Vec<u32>> {
+        let response = self
+            .http_client
+            .get(format!("{}/apps/{}/machines", FLY_API_URL, app_name))
+            .header("Authorization", format!("Bearer {}", self.api_token))
+            .send()
+            .await
+            .context("Failed to list machines")?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        if !response.status().is_success() {
+            let status = response.status();
+            let error = response.text().await.unwrap_or_default();
+            anyhow::bail!("{}", log_and_sanitize_error("List machines", status, &error));
+        }
+
+        let machines: Vec<MachineListItem> =
+            response.json().await.context("Failed to parse machines list")?;
+        Ok(machines
+            .into_iter()
+            .filter(|m| m.state == "started")
+            .map(|m| m.config.guest.memory_mb)
+            .collect())
+    }
+
     /// Encode app_name and machine_id into a single ID string
     fn encode_id(app_name: &str, machine_id: &str) -> String {
         format!("{}:{}", app_name, machine_id)
@@ -123,6 +154,26 @@ struct MachineResponse {
     #[allow(dead_code)]
     name: String,
     state: String,
+}
+
+/// Subset of the Fly machine object we need to bill running time (state + memory).
+#[derive(Debug, Deserialize)]
+struct MachineListItem {
+    state: String,
+    #[serde(default)]
+    config: MachineListConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MachineListConfig {
+    #[serde(default)]
+    guest: MachineListGuest,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MachineListGuest {
+    #[serde(default)]
+    memory_mb: u32,
 }
 
 #[async_trait::async_trait]

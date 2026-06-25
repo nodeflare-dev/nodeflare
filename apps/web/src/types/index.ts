@@ -48,6 +48,8 @@ export interface McpServer {
   build_command: string | null;
   /** When false, NodeFlare authentication is disabled (for servers with their own auth) */
   auth_enabled: boolean;
+  /** User-selected machine memory in MB (256/512/1024/2048). null = auto. */
+  memory_mb: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -163,6 +165,8 @@ export interface CreateServerRequest {
   build_command?: string;
   /** When false, skip NodeFlare authentication layer (for servers that handle their own auth) */
   auth_enabled?: boolean;
+  /** User-selected machine memory in MB (256/512/1024/2048). Omit for auto. */
+  memory_mb?: number;
 }
 
 export interface UpdateServerRequest {
@@ -180,6 +184,8 @@ export interface UpdateServerRequest {
   build_command?: string;
   /** When false, skip NodeFlare authentication layer (for servers that handle their own auth) */
   auth_enabled?: boolean;
+  /** User-selected machine memory in MB (256/512/1024/2048). */
+  memory_mb?: number;
 }
 
 export interface CreateAccessTokenRequest {

@@ -1889,6 +1889,7 @@ pub async fn build_and_deploy(
     job: &BuildJob,
     source_dir: &Path,
     secrets: &[SecretEnv],
+    plan_memory_ceiling_mb: u64,
     on_log: impl Fn(&str),
 ) -> Result<DeployResult> {
     let server_id_str = job.server_id.to_string();
@@ -1923,9 +1924,22 @@ pub async fn build_and_deploy(
         }
     }
 
-    // Write fly.toml (bump memory when a heavy dependency needs it; default 256MB).
+    // Resolve machine memory: start from the user's choice (or 256MB default), raise
+    // it to any detection floor (headless browsers need ~2GB), then clamp to what the
+    // plan allows. Clamping the floor LAST is deliberate — a free-tier browser server
+    // stays at its small ceiling and fails honestly via the OOM hint, instead of being
+    // silently handed a 2GB machine the plan doesn't pay for.
     let fly_toml_path = source_dir.join("fly.toml");
-    let memory_mb = provision.min_memory_mb.unwrap_or(256);
+    let requested_mb = job.memory_mb.map(|m| m as u64).unwrap_or(256);
+    let floor_mb = provision.min_memory_mb.unwrap_or(0);
+    let memory_mb = requested_mb
+        .max(floor_mb)
+        .min(plan_memory_ceiling_mb)
+        .max(256);
+    on_log(&format!(
+        "Machine memory: {}MB (requested {}MB, detection floor {}MB, plan ceiling {}MB)",
+        memory_mb, requested_mb, floor_mb, plan_memory_ceiling_mb
+    ));
     let fly_toml_content =
         generate_fly_toml(&app_name, &job.region, &job.runtime, &job.transport, memory_mb);
     tokio::fs::write(&fly_toml_path, &fly_toml_content)
@@ -2291,6 +2305,7 @@ pub(crate) fn extract_error_lines(log: &str, max_lines: usize) -> String {
         "cannot find", "cannot read", "not found", "no such file",
         "did not complete", "exit code", "exited with", "failed to",
         "module_not_found", "modulenotfounderror", "permission denied",
+        "out of memory", "oom", "killed process", "sigkill",
     ];
     let stripped = strip_ansi(log);
     let mut seen = std::collections::HashSet::new();
@@ -2340,18 +2355,39 @@ pub(crate) async fn fetch_app_logs(config: &AppConfig, app_name: &str) -> Option
 // probe a real MCP `initialize` against the deployed endpoint and only trust the
 // deploy when the child actually answers.
 //
-// Direction: fail the deploy only on a *proven* failure (the adapter returns 5xx
-// across retries — i.e. the child is dead). Cold-start/network noise is reported as
-// Inconclusive and does NOT fail the deploy, to avoid false negatives.
+// Direction: fail the deploy on a *proven* failure, which is one of two shapes —
+//   (a) the adapter returns 5xx across retries (it's up, but the child is dead), or
+//   (b) not a single HTTP request ever completes across all retries (nothing is
+//       listening on the MCP port — a crash-loop / OOM / wrong bind).
+// Only the in-between stays Inconclusive: the endpoint *did* answer at the HTTP
+// layer at least once but never with a valid initialize (4xx, partial handshake) —
+// that can still be cold-start noise, so we don't fail on it.
 // ============================================================================
 
+#[derive(Debug, PartialEq)]
 pub(crate) enum ProbeOutcome {
     /// The MCP server answered an initialize request.
     Verified,
-    /// The server is reachable but failed (adapter 5xx) — the child isn't running.
+    /// Proven failure: either the adapter returned 5xx across retries (child dead),
+    /// or no HTTP request ever completed (nothing listening on the MCP port).
     Broken(String),
-    /// Couldn't get a definitive answer (timeouts/cold start) — don't fail on this.
+    /// The endpoint answered at the HTTP layer but never with a valid initialize
+    /// (4xx / partial handshake) — could still be cold start, so don't fail on it.
     Inconclusive(String),
+}
+
+/// Decide the probe outcome from what the retry loop observed. Pure so it can be
+/// unit-tested without a live endpoint.
+fn classify_probe(saw_server_error: bool, saw_http_response: bool, detail: String) -> ProbeOutcome {
+    // `saw_server_error` ⇒ adapter up but child dead. `!saw_http_response` ⇒ the
+    // probe never even completed a request, so nothing is listening — a server that
+    // can't return a single byte is broken, not "inconclusive". Folding the latter
+    // into Inconclusive is exactly what let an OOM crash-loop be reported as success.
+    if saw_server_error || !saw_http_response {
+        ProbeOutcome::Broken(detail)
+    } else {
+        ProbeOutcome::Inconclusive(detail)
+    }
 }
 
 /// Char-safe short preview of a response body for logs/errors.
@@ -2405,6 +2441,7 @@ pub(crate) async fn verify_mcp_initialize(
 
     const ATTEMPTS: usize = 8;
     let mut saw_server_error = false;
+    let mut saw_http_response = false;
     let mut last_detail = String::from("no response");
 
     for attempt in 1..=ATTEMPTS {
@@ -2417,6 +2454,7 @@ pub(crate) async fn verify_mcp_initialize(
             .await
         {
             Ok(resp) => {
+                saw_http_response = true;
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
                 if status.is_success() && looks_like_jsonrpc(&text) {
@@ -2441,11 +2479,7 @@ pub(crate) async fn verify_mcp_initialize(
         }
     }
 
-    if saw_server_error {
-        ProbeOutcome::Broken(last_detail)
-    } else {
-        ProbeOutcome::Inconclusive(last_detail)
-    }
+    classify_probe(saw_server_error, saw_http_response, last_detail)
 }
 
 #[cfg(test)]
@@ -2965,6 +2999,48 @@ Error: Cannot find module '/app/dist/index.js'
         let out = extract_error_lines(log, 12);
         assert_eq!(out.matches("Cannot find module").count(), 1);
         assert_eq!(out.matches("MCP process exited").count(), 1);
+    }
+
+    #[test]
+    fn extract_error_lines_surfaces_oom() {
+        // The OOM kill is the root-cause line; it must survive the marker filter so
+        // the user sees *why* the server never started.
+        let log = "\
+[Adapter] Auto-initializing MCP process...
+[  360.482640] Out of memory: Killed process 662 (python) total-vm:890996kB
+[Adapter] MCP process exited with code null, signal SIGKILL";
+        let out = extract_error_lines(log, 12);
+        assert!(out.contains("Out of memory"));
+        assert!(out.contains("SIGKILL"));
+    }
+
+    // ---- Post-deploy probe classification ----
+
+    #[test]
+    fn probe_5xx_is_broken() {
+        // Adapter answered but with 5xx across retries — the child is dead.
+        let out = classify_probe(true, true, "HTTP 502".into());
+        assert_eq!(out, ProbeOutcome::Broken("HTTP 502".into()));
+    }
+
+    #[test]
+    fn probe_never_reachable_is_broken() {
+        // No HTTP request ever completed (connection errors/timeouts every attempt):
+        // nothing is listening — an OOM crash-loop, not cold-start noise. This is the
+        // case that used to be mislabeled Inconclusive and reported as success.
+        let out = classify_probe(false, false, "request error: error sending request".into());
+        assert_eq!(
+            out,
+            ProbeOutcome::Broken("request error: error sending request".into())
+        );
+    }
+
+    #[test]
+    fn probe_reachable_but_no_initialize_is_inconclusive() {
+        // The endpoint answered at the HTTP layer (e.g. 4xx) but never a valid
+        // initialize — could still be cold start, so we don't fail the deploy.
+        let out = classify_probe(false, true, "HTTP 404".into());
+        assert_eq!(out, ProbeOutcome::Inconclusive("HTTP 404".into()));
     }
 
     #[test]

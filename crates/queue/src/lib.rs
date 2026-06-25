@@ -30,6 +30,9 @@ pub struct BuildJob {
     /// Custom build command run at image-build time (e.g., "npm run build", "npm run compile")
     /// If None, fall back to the runtime default (Node: `npm run build --if-present`)
     pub build_command: Option<String>,
+    /// User-selected machine memory in MB (256/512/1024/2048). None = auto (builder default).
+    /// The builder still raises this to the detection floor and clamps it to the plan ceiling.
+    pub memory_mb: Option<i32>,
 }
 
 impl BuildJob {
@@ -55,6 +58,7 @@ impl BuildJob {
             transport: server.transport.clone(),
             entry_command: server.entry_command.clone(),
             build_command: server.build_command.clone(),
+            memory_mb: server.memory_mb,
         }
     }
 }

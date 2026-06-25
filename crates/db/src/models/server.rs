@@ -32,6 +32,8 @@ pub struct McpServer {
     pub build_command: Option<String>,
     /// When false, skip NodeFlare authentication layer (for servers that handle their own auth)
     pub auth_enabled: bool,
+    /// User-selected machine memory in MB (256/512/1024/2048). None = auto (builder default).
+    pub memory_mb: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -105,6 +107,7 @@ pub struct CreateServer {
     pub entry_command: Option<String>,
     pub build_command: Option<String>,
     pub auth_enabled: bool,
+    pub memory_mb: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -122,4 +125,5 @@ pub struct UpdateServer {
     pub entry_command: Option<String>,
     pub build_command: Option<String>,
     pub auth_enabled: Option<bool>,
+    pub memory_mb: Option<i32>,
 }
