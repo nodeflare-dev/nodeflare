@@ -3,8 +3,7 @@ use stripe::{
     CheckoutSession, CheckoutSessionMode, Client, CreateCheckoutSession,
     CreateCheckoutSessionLineItems, CreateCustomer, CreateBillingPortalSession,
     Customer, CustomerId, Subscription, SubscriptionId,
-    Invoice, ListInvoices,
-    SubscriptionItemId, PriceId,
+    Invoice, ListInvoices, PriceId, SubscriptionItemId,
 };
 use uuid::Uuid;
 
@@ -14,6 +13,10 @@ use crate::plans::{get_plan_by_price_id, Plan};
 #[derive(Clone)]
 pub struct BillingService {
     client: Client,
+    // Kept for raw Stripe REST calls that async-stripe 0.39 doesn't model
+    // (Billing Meter Events). Stripe secret key.
+    api_key: String,
+    http: reqwest::Client,
     success_url: String,
     cancel_url: String,
     portal_return_url: String,
@@ -25,6 +28,8 @@ impl BillingService {
 
         Self {
             client,
+            api_key: api_key.to_string(),
+            http: reqwest::Client::new(),
             success_url: format!("{}/dashboard/billing/success", base_url),
             cancel_url: format!("{}/dashboard/billing/cancel", base_url),
             portal_return_url: format!("{}/dashboard/billing", base_url),
@@ -65,11 +70,25 @@ impl BillingService {
         params.mode = Some(CheckoutSessionMode::Subscription);
         params.success_url = Some(&self.success_url);
         params.cancel_url = Some(&self.cancel_url);
-        params.line_items = Some(vec![CreateCheckoutSessionLineItems {
+        let mut line_items = vec![CreateCheckoutSessionLineItems {
             price: Some(price_id.to_string()),
             quantity: Some(1),
             ..Default::default()
-        }]);
+        }];
+        // Attach the metered usage price for Pro so GB-hour usage records can bill
+        // against it. A metered line item carries no quantity (usage sets it). Dormant
+        // until STRIPE_PRICE_PRO_USAGE is configured.
+        if get_plan_by_price_id(price_id) == Some(Plan::Pro) {
+            if let Ok(usage_price) = std::env::var("STRIPE_PRICE_PRO_USAGE") {
+                if !usage_price.is_empty() {
+                    line_items.push(CreateCheckoutSessionLineItems {
+                        price: Some(usage_price),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        params.line_items = Some(line_items);
         params.metadata = Some(
             [("workspace_id".to_string(), workspace_id.to_string())]
                 .into_iter()
@@ -87,6 +106,66 @@ impl BillingService {
         CheckoutSession::create(&self.client, params)
             .await
             .map_err(|e| anyhow!("Failed to create checkout session: {}", e))
+    }
+
+    /// Find the subscription item carrying the metered (usage-based) price. Used as a gate
+    /// before reporting meter usage: returns None if the subscription has no such item
+    /// (e.g. the customer subscribed before usage billing was enabled), in which case we
+    /// skip billing them.
+    pub async fn find_metered_subscription_item(
+        &self,
+        subscription_id: &str,
+        metered_price_id: &str,
+    ) -> Result<Option<String>> {
+        let sub = self.get_subscription(subscription_id).await?;
+        Ok(sub.items.data.into_iter().find_map(|item| {
+            let matches = item
+                .price
+                .as_ref()
+                .map(|p| p.id.as_str() == metered_price_id)
+                .unwrap_or(false);
+            matches.then(|| item.id.to_string())
+        }))
+    }
+
+    /// Report metered usage (e.g. GB-hours) to Stripe as a Billing Meter Event.
+    ///
+    /// Modern Stripe requires metered prices to be backed by a Billing Meter, and usage is
+    /// reported per-customer via `/v1/billing/meter_events` (not per subscription-item usage
+    /// records, which async-stripe 0.39 models but Stripe no longer provisions). Each event
+    /// carries the GB-hours in `payload[value]`; the meter's `sum` aggregation accumulates
+    /// them over the billing period. `identifier` makes the call idempotent — re-reporting the
+    /// same identifier within the dedup window is a no-op, so a crash between reporting and
+    /// marking rows reported won't double-bill. Returns the event identifier.
+    pub async fn report_meter_usage(
+        &self,
+        customer_id: &str,
+        event_name: &str,
+        quantity: u64,
+        timestamp: i64,
+        identifier: &str,
+    ) -> Result<String> {
+        let resp = self
+            .http
+            .post("https://api.stripe.com/v1/billing/meter_events")
+            .bearer_auth(&self.api_key)
+            .form(&[
+                ("event_name", event_name),
+                ("identifier", identifier),
+                ("timestamp", &timestamp.to_string()),
+                ("payload[stripe_customer_id]", customer_id),
+                ("payload[value]", &quantity.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to send meter event: {}", e))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Meter event rejected ({}): {}", status, body));
+        }
+        Ok(identifier.to_string())
     }
 
     /// Create a customer portal session for managing subscription

@@ -95,6 +95,8 @@ async fn main() -> Result<()> {
 
     // Start request_logs cleanup task
     start_request_logs_cleanup_task(db_pool.clone());
+    start_usage_sampler_task(db_pool.clone());
+    start_usage_reporting_task(db_pool.clone(), state.billing.clone());
     tracing::info!("Request logs cleanup task started");
 
     // Start deployment timeout task
@@ -182,6 +184,210 @@ fn start_deployment_timeout_task(db_pool: mcp_db::DbPool) {
                 }
                 Err(e) => {
                     tracing::error!("Failed to timeout stuck deployments: {}", e);
+                }
+            }
+        }
+    });
+}
+
+/// "https://mcp-abc.fly.dev/" -> "mcp-abc". The Fly app name is the first host label.
+fn app_name_from_endpoint(endpoint_url: &str) -> Option<String> {
+    let host = endpoint_url.split("://").nth(1).unwrap_or(endpoint_url);
+    let host = host.split('/').next().unwrap_or(host);
+    let label = host.split('.').next().unwrap_or(host);
+    (!label.is_empty()).then(|| label.to_string())
+}
+
+/// Background task: every interval, sample each running server's *started* Fly machines
+/// and accrue memory-weighted active time (GB-minutes) for usage billing. Billing follows
+/// real running machines, so idle (auto-stopped) time costs nothing and HA replicas count
+/// individually. This only records usage; Stripe reporting is a separate (later) step.
+fn start_usage_sampler_task(db_pool: mcp_db::DbPool) {
+    use mcp_container::FlyioRuntime;
+    use mcp_db::{RegionUsageRepository, ServerRepository};
+
+    // Resolution of the accrued time equals this interval (default 5 min).
+    let interval_secs: u64 = std::env::var("USAGE_SAMPLE_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
+
+    // Build a Fly client from the same env AppState uses; skip sampling if unconfigured.
+    let fly = match (std::env::var("FLY_API_TOKEN"), std::env::var("FLY_ORG_SLUG")) {
+        (Ok(token), Ok(org)) => {
+            let region = std::env::var("FLY_REGION").unwrap_or_else(|_| "nrt".to_string());
+            FlyioRuntime::new(token, org, region).ok()
+        }
+        _ => None,
+    };
+    let Some(fly) = fly else {
+        tracing::warn!("Usage sampler disabled: Fly.io not configured");
+        return;
+    };
+
+    let interval_minutes = interval_secs as f64 / 60.0;
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        loop {
+            interval.tick().await;
+
+            let servers = match ServerRepository::list_running(&db_pool).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!("usage sampler: failed to list running servers: {}", e);
+                    continue;
+                }
+            };
+
+            // NOTE: one Fly API call per running server per tick. Fine at small scale;
+            // batch/cache by org if the running fleet grows large.
+            for server in servers {
+                let Some(app_name) = server.endpoint_url.as_deref().and_then(app_name_from_endpoint)
+                else {
+                    continue;
+                };
+                let started = match fly.list_started_machine_memory_mb(&app_name).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::warn!("usage sampler: list machines failed for {}: {}", app_name, e);
+                        continue;
+                    }
+                };
+                if started.is_empty() {
+                    continue; // auto-stopped / idle → no billable time
+                }
+                // GB-minutes this tick = sum over started machines of (memory_gb) * interval.
+                let gb: f64 = started.iter().map(|mb| *mb as f64 / 1024.0).sum();
+                let gb_minutes = gb * interval_minutes;
+                if let Err(e) = RegionUsageRepository::add_gb_minutes(
+                    &db_pool,
+                    server.workspace_id,
+                    server.id,
+                    &server.region,
+                    gb_minutes,
+                )
+                .await
+                {
+                    tracing::error!("usage sampler: failed to accrue usage for {}: {}", server.id, e);
+                }
+            }
+        }
+    });
+}
+
+/// Background task: report accumulated GB-hours to Stripe as metered usage for paid
+/// workspaces, then mark those rows reported. Dormant unless a Stripe usage price
+/// (`STRIPE_PRICE_PRO_USAGE`) and a billing client are configured — so it never bills
+/// until you intentionally enable it.
+fn start_usage_reporting_task(db_pool: mcp_db::DbPool, billing: Option<mcp_billing::BillingService>) {
+    use mcp_db::{RegionUsageRepository, WorkspaceRepository};
+
+    let usage_price = match std::env::var("STRIPE_PRICE_PRO_USAGE") {
+        Ok(p) if !p.is_empty() => p,
+        _ => {
+            tracing::info!("Usage reporting disabled: STRIPE_PRICE_PRO_USAGE not set");
+            return;
+        }
+    };
+    let Some(billing) = billing else {
+        tracing::warn!("Usage reporting disabled: billing not configured");
+        return;
+    };
+
+    // The Billing Meter's event_name (usage is reported per-customer to this meter).
+    // Must match the meter backing STRIPE_PRICE_PRO_USAGE in Stripe.
+    let meter_event = std::env::var("STRIPE_USAGE_METER_EVENT")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "nodeflare_gb_hours".to_string());
+
+    // Report hourly by default. Stripe aggregates increments within the period.
+    let interval_secs: u64 = std::env::var("USAGE_REPORT_INTERVAL_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3600);
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        loop {
+            interval.tick().await;
+
+            let workspaces = match RegionUsageRepository::list_unreported_workspaces(&db_pool).await {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!("usage reporting: failed to list workspaces: {}", e);
+                    continue;
+                }
+            };
+
+            for ws_id in workspaces {
+                let Ok(Some(ws)) = WorkspaceRepository::find_by_id(&db_pool, ws_id).await else {
+                    continue;
+                };
+                // Only paid plans are usage-billed; Free is flat-capped.
+                if ws.plan == "free" {
+                    continue;
+                }
+                let Some(subscription_id) = ws.stripe_subscription_id.as_deref() else {
+                    continue;
+                };
+                let Some(customer_id) = ws.stripe_customer_id.as_deref() else {
+                    continue;
+                };
+
+                // Gate: only bill workspaces actually subscribed to the usage price. Existing
+                // Pro subs that predate usage billing have no such item, so we skip them and
+                // keep accumulating (they're never charged until the item is added).
+                match billing
+                    .find_metered_subscription_item(subscription_id, &usage_price)
+                    .await
+                {
+                    Ok(Some(_)) => {} // subscribed to the usage price → bill it
+                    Ok(None) => continue, // subscription has no usage item yet
+                    Err(e) => {
+                        tracing::warn!("usage reporting: lookup item failed for {}: {}", ws_id, e);
+                        continue;
+                    }
+                };
+
+                let rows = match RegionUsageRepository::list_unreported(&db_pool, ws_id).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::error!("usage reporting: list_unreported failed: {}", e);
+                        continue;
+                    }
+                };
+                let gb_hours: f64 = rows.iter().map(|r| r.gb_minutes).sum::<f64>() / 60.0;
+                let quantity = gb_hours.round() as u64;
+                // Below 1 GB-hour: leave unreported so it accumulates (avoids reporting 0).
+                if quantity == 0 {
+                    continue;
+                }
+
+                // Deterministic per-batch identifier so a crash between reporting and marking
+                // rows reported can't double-bill: the same unreported batch yields the same id.
+                let batch_id = rows.iter().map(|r| r.id).max().unwrap();
+                let identifier = format!("nf-{}-{}", ws_id, batch_id);
+
+                let now_ts = chrono::Utc::now().timestamp();
+                match billing
+                    .report_meter_usage(customer_id, &meter_event, quantity, now_ts, &identifier)
+                    .await
+                {
+                    Ok(record_id) => {
+                        for r in &rows {
+                            if let Err(e) =
+                                RegionUsageRepository::mark_reported(&db_pool, r.id, &record_id).await
+                            {
+                                tracing::error!("usage reporting: mark_reported failed: {}", e);
+                            }
+                        }
+                        tracing::info!("Reported {} GB-hours for workspace {}", quantity, ws_id);
+                    }
+                    Err(e) => {
+                        tracing::error!("usage reporting: report_meter_usage failed for {}: {}", ws_id, e);
+                    }
                 }
             }
         }
