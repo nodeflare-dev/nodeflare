@@ -34,11 +34,21 @@ pub struct McpServer {
     pub auth_enabled: bool,
     /// User-selected machine memory in MB (256/512/1024/2048). None = auto (builder default).
     pub memory_mb: Option<i32>,
+    /// Fly.io app name this server deploys to. Decided ONCE at creation and persisted so
+    /// it is never recomputed from a truncated UUID prefix (which collided across tenants).
+    pub fly_app_name: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl McpServer {
+    /// Canonical, collision-free Fly app name for a server: `mcp-<uuid-without-dashes>`.
+    /// Uses the FULL UUID (128 bits) — the old `mcp-<first-segment>` scheme used only the
+    /// first 32 bits and could map two distinct servers onto the same Fly app.
+    pub fn new_fly_app_name(id: Uuid) -> String {
+        format!("mcp-{}", id.simple())
+    }
+
     pub fn runtime(&self) -> Runtime {
         match self.runtime.as_str() {
             "node" => Runtime::Node,
@@ -72,6 +82,7 @@ impl McpServer {
             "running" => ServerStatus::Running,
             "failed" => ServerStatus::Failed,
             "stopped" => ServerStatus::Stopped,
+            "deleting" => ServerStatus::Deleting,
             _ => ServerStatus::Inactive,
         }
     }

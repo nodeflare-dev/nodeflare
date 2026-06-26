@@ -29,6 +29,8 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { PageHeaderProvider, DashboardHeaderTitle } from './page-header';
+import { WorkspaceProvider } from '@/hooks/use-workspace';
+import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
 
 interface NavItem {
   id: string;
@@ -236,6 +238,7 @@ export default function DashboardLayout({
 
   return (
     <PageHeaderProvider>
+    <WorkspaceProvider>
     <div className="h-screen flex overflow-hidden">
       {/* Mobile menu backdrop */}
       {mobileMenuOpen && (
@@ -264,6 +267,9 @@ export default function DashboardLayout({
               <ChevronsRight className="w-4 h-4" />
             )}
           </button>
+        </div>
+        <div className={`border-r border-gray-200 ${sidebarOpen ? 'px-2 py-2' : 'px-1.5 py-2'}`}>
+          <WorkspaceSwitcher collapsed={!sidebarOpen} />
         </div>
         <nav className="py-2 pl-2 space-y-0.5 border-r border-gray-200 flex-1">
           <DndContext
@@ -305,6 +311,9 @@ export default function DashboardLayout({
           >
             <X className="w-5 h-5" />
           </button>
+        </div>
+        <div className="px-2 py-2">
+          <WorkspaceSwitcher />
         </div>
         <nav className="py-2 px-2 space-y-0.5 flex-1 overflow-y-auto">
           {sortedNavItems.map((item) => (
@@ -385,6 +394,7 @@ export default function DashboardLayout({
         <main className="flex-1 p-4 md:p-6 bg-card overflow-y-auto overflow-x-hidden">{children}</main>
       </div>
     </div>
+    </WorkspaceProvider>
     </PageHeaderProvider>
   );
 }

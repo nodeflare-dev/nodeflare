@@ -31,26 +31,42 @@ async fn send_deploy_notification(
         None => return,
     };
 
-    // Get server -> workspace -> owner user
+    // Get server -> workspace -> owner user. Log lookup failures rather than silently
+    // dropping the notification, so a misconfigured row doesn't fail invisibly.
     let server = match ServerRepository::find_by_id(&ctx.db, server_id).await {
         Ok(Some(s)) => s,
-        _ => return,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!("Deploy notification: failed to load server {}: {}", server_id, e);
+            return;
+        }
     };
 
     let workspace = match WorkspaceRepository::find_by_id(&ctx.db, server.workspace_id).await {
         Ok(Some(w)) => w,
-        _ => return,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!("Deploy notification: failed to load workspace {}: {}", server.workspace_id, e);
+            return;
+        }
     };
 
     let owner = match UserRepository::find_by_id(&ctx.db, workspace.owner_id).await {
         Ok(Some(u)) => u,
-        _ => return,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!("Deploy notification: failed to load owner {}: {}", workspace.owner_id, e);
+            return;
+        }
     };
 
     // Check notification settings
     let settings = match NotificationSettingsRepository::get_or_create(&ctx.db, owner.id).await {
         Ok(s) => s,
-        _ => return,
+        Err(e) => {
+            tracing::warn!("Deploy notification: failed to load settings for {}: {}", owner.id, e);
+            return;
+        }
     };
 
     let app_url = std::env::var("APP_URL").unwrap_or_else(|_| "https://mcpcloud.dev".to_string());
@@ -230,6 +246,170 @@ struct BuilderContext {
     email: Option<EmailService>,
 }
 
+/// Maximum attempts a job is retried by the [`BoundedBackoffRetry`] layer before being
+/// given up on. Retries fire only when a handler returns `Err` (a transient failure that
+/// was NOT recorded as a terminal `Failed` status — see the Err-vs-Ok contract in
+/// `handle_build_job`).
+const MAX_JOB_RETRIES: usize = 3;
+
+/// In-flight job concurrency per worker. Previously every worker was implicitly serial
+/// (1), so a single slow build blocked the whole queue. Bounded so we don't fan out
+/// unbounded remote builds. Overridable via `BUILDER_CONCURRENCY`.
+fn worker_concurrency() -> usize {
+    std::env::var("BUILDER_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n >= 1)
+        .unwrap_or(4)
+}
+
+/// Hard ceiling on a single build+deploy+verify cycle. A hung remote build or a probe
+/// that never resolves must not pin a worker (or leave a deployment `Building`) forever.
+const BUILD_DEPLOY_TIMEOUT_SECS: u64 = 25 * 60;
+
+/// A deployment left in a non-terminal state longer than this is considered stuck (the
+/// worker died mid-build, the process was OOM-killed, etc.) and is reaped to `Failed`.
+const STUCK_DEPLOYMENT_TIMEOUT_MINUTES: i64 = 30;
+
+/// How often the background reaper sweeps for stuck deployments.
+const REAPER_INTERVAL_SECS: u64 = 5 * 60;
+
+/// A server left in `deleting` longer than this had its destroy job fail to confirm (the
+/// worker died mid-destroy, the queue dropped the job, or every retry failed). The orphan
+/// sweeper re-drives the teardown so we don't leak a billable Fly app.
+const DELETING_STUCK_TIMEOUT_MINUTES: i64 = 15;
+
+/// How often the orphan-destroy sweeper runs (also once at startup to reconcile).
+const ORPHAN_SWEEPER_INTERVAL_SECS: u64 = 10 * 60;
+
+/// An apalis/tower retry policy: retries a failed job up to `max_retries` times with
+/// capped exponential backoff (so a returned `Err` is actually re-attempted instead of
+/// being silently terminal). Backoff is `5s · 2^attempt`, capped at 5 minutes, plus a
+/// little jitter to avoid synchronized retries across workers.
+#[derive(Clone)]
+struct BoundedBackoffRetry {
+    max_retries: usize,
+}
+
+impl<T, Res, Ctx> tower::retry::Policy<Request<T, Ctx>, Res, Error> for BoundedBackoffRetry
+where
+    T: Clone,
+    Ctx: Clone,
+{
+    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+    fn retry(
+        &mut self,
+        req: &mut Request<T, Ctx>,
+        result: &mut Result<Res, Error>,
+    ) -> Option<Self::Future> {
+        if result.is_ok() {
+            return None;
+        }
+        let attempt = req.parts.attempt.current();
+        if attempt >= self.max_retries {
+            return None;
+        }
+        let base = 5u64.saturating_mul(1u64 << attempt.min(6));
+        let capped = base.min(300);
+        // Cheap jitter (0..=2s) derived from the clock — avoids pulling in a rng crate.
+        let jitter = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_millis() as u64)
+            .unwrap_or(0))
+            % 3;
+        Some(Box::pin(tokio::time::sleep(std::time::Duration::from_secs(
+            capped + jitter,
+        ))))
+    }
+
+    fn clone_request(&mut self, req: &Request<T, Ctx>) -> Option<Request<T, Ctx>> {
+        let req = req.clone();
+        req.parts.attempt.increment();
+        Some(req)
+    }
+}
+
+/// Background reaper: periodically fails deployments stuck in a non-terminal state for
+/// too long. Covers the case where a worker died mid-build (SIGKILL/OOM/crash) leaving a
+/// deployment pinned at `Building`/`Deploying` with no one to ever finish it. Runs once
+/// at startup (reconcile after a restart) and then on an interval.
+async fn run_stuck_deployment_reaper(db: mcp_db::DbPool) {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(REAPER_INTERVAL_SECS));
+    loop {
+        interval.tick().await;
+        match DeploymentRepository::timeout_stuck_deployments(&db, STUCK_DEPLOYMENT_TIMEOUT_MINUTES)
+            .await
+        {
+            Ok(n) if n > 0 => {
+                tracing::warn!(
+                    "Reaper: failed {} deployment(s) stuck >{}min in a non-terminal state",
+                    n,
+                    STUCK_DEPLOYMENT_TIMEOUT_MINUTES
+                );
+            }
+            Ok(_) => {}
+            Err(e) => tracing::error!("Reaper: failed to sweep stuck deployments: {}", e),
+        }
+    }
+}
+
+/// Background sweeper for orphaned teardowns: finds servers stuck in `deleting` (their
+/// destroy job never confirmed) and re-drives the Fly app destroy. Destroying a missing
+/// app is a no-op, so this is idempotent; on success it hard-deletes the row to complete
+/// the soft-delete. Runs once at startup (reconcile after a restart) then on an interval.
+async fn run_orphan_destroy_sweeper(ctx: Arc<BuilderContext>) {
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(ORPHAN_SWEEPER_INTERVAL_SECS));
+    loop {
+        interval.tick().await;
+        let stuck = match ServerRepository::list_deleting_older_than(
+            &ctx.db,
+            DELETING_STUCK_TIMEOUT_MINUTES,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("Orphan sweeper: failed to list servers stuck in deleting: {}", e);
+                continue;
+            }
+        };
+        if stuck.is_empty() {
+            continue;
+        }
+        tracing::warn!(
+            "Orphan sweeper: {} server(s) stuck in 'deleting' >{}min; re-driving teardown",
+            stuck.len(),
+            DELETING_STUCK_TIMEOUT_MINUTES
+        );
+        for server in stuck {
+            match flyctl::destroy_app(&ctx.config, &server.fly_app_name).await {
+                Ok(()) => {
+                    if let Err(e) = ServerRepository::delete(&ctx.db, server.id).await {
+                        tracing::error!(
+                            "Orphan sweeper: destroyed {} but failed to delete row {}: {}",
+                            server.fly_app_name, server.id, e
+                        );
+                    } else {
+                        tracing::info!(
+                            "Orphan sweeper: torn down {} and removed server {}",
+                            server.fly_app_name, server.id
+                        );
+                    }
+                }
+                Err(e) => {
+                    // Leave in `deleting` for the next sweep — don't lose the record.
+                    tracing::warn!(
+                        "Orphan sweeper: destroy of {} (server {}) failed, will retry: {}",
+                        server.fly_app_name, server.id, e
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
@@ -323,18 +503,31 @@ async fn main() -> Result<()> {
 
     tracing::info!("Connected to job queue, created BuildJob, DeployJob and DestroyJob storage instances");
 
-    // Create workers
+    // Create workers.
+    // - `.concurrency(n)` lets each worker process several jobs at once so one slow
+    //   build no longer stalls the entire queue.
+    // - `.retry(policy)` makes a handler's `Err` actually re-attempt with bounded
+    //   exponential backoff (apalis treats a bare `Err` as terminal otherwise).
+    let retry_policy = BoundedBackoffRetry { max_retries: MAX_JOB_RETRIES };
+    let concurrency = worker_concurrency();
+
     let build_worker = WorkerBuilder::new("build-worker")
+        .concurrency(concurrency)
+        .retry(retry_policy.clone())
         .data(context.clone())
         .backend(storage)
         .build_fn(handle_build_job);
 
     let deploy_worker = WorkerBuilder::new("deploy-worker")
+        .concurrency(concurrency)
+        .retry(retry_policy.clone())
         .data(context.clone())
         .backend(deploy_storage)
         .build_fn(handle_deploy_job);
 
     let destroy_worker = WorkerBuilder::new("destroy-worker")
+        .concurrency(concurrency)
+        .retry(retry_policy.clone())
         .data(context.clone())
         .backend(destroy_storage)
         .build_fn(handle_destroy_job);
@@ -356,6 +549,15 @@ async fn main() -> Result<()> {
             tracing::error!("Health server error: {}", e);
         }
     });
+
+    // Reconcile-on-startup + periodic reaper for deployments stuck in a non-terminal
+    // state (worker died mid-build, OOM, etc.) so they don't show "Building" forever.
+    tokio::spawn(run_stuck_deployment_reaper(context.db.clone()));
+
+    // Reconcile-on-startup + periodic sweeper for servers stuck in `deleting` whose Fly
+    // app teardown never confirmed (worker crash, dropped job, exhausted retries) so we
+    // don't leak orphaned, billable apps.
+    tokio::spawn(run_orphan_destroy_sweeper(context.clone()));
 
     tracing::info!("Starting job queue workers (poll interval: 30s)...");
 
@@ -407,16 +609,43 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Run workers - this blocks forever, polling for jobs
+    // Run workers - this blocks until shutdown is signalled, polling for jobs.
     let monitor = Monitor::new()
         .register(build_worker)
         .register(deploy_worker)
-        .register(destroy_worker);
+        .register(destroy_worker)
+        // On SIGTERM/Ctrl-C, let in-flight jobs drain (up to this bound) before exiting,
+        // so a deploy in progress isn't left half-applied.
+        .shutdown_timeout(std::time::Duration::from_secs(30));
 
-    tracing::info!("Monitor created with 2 workers, calling run()...");
+    tracing::info!("Monitor created with 3 workers, calling run()...");
 
-    // Run the monitor - this should block and poll for jobs
-    match monitor.run().await {
+    // Graceful shutdown: SIGTERM (Fly.io machine stop / deploy) or Ctrl-C triggers a
+    // drain rather than an abrupt kill.
+    let shutdown_signal = async {
+        let sigterm = async {
+            #[cfg(unix)]
+            {
+                let mut s = tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::terminate(),
+                )?;
+                s.recv().await;
+                Ok::<(), std::io::Error>(())
+            }
+            #[cfg(not(unix))]
+            {
+                futures::future::pending::<()>().await;
+                Ok::<(), std::io::Error>(())
+            }
+        };
+        tokio::select! {
+            r = tokio::signal::ctrl_c() => r,
+            r = sigterm => r,
+        }
+    };
+
+    // Run the monitor until a shutdown signal arrives, then drain.
+    match monitor.run_with_signal(shutdown_signal).await {
         Ok(()) => {
             tracing::info!("Monitor.run() completed successfully");
         }
@@ -472,7 +701,10 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         )
         .await
         .ok();
-        return Err(Error::Failed(Arc::new(anyhow::anyhow!(err_msg).into())));
+        // Terminal: the deployment was already recorded as `Failed` above. Return Ok so
+        // the RetryLayer does NOT re-run a job that can only fail the same way (the Err
+        // contract is reserved for transient failures that were NOT recorded).
+        return Ok(());
     }
     let (owner, repo) = (parts[0], parts[1]);
 
@@ -519,7 +751,9 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
     if let Err(e) = download_result {
         let err_msg = format!("Failed to download source: {}", e);
         handle_build_failure(&ctx, &job, &err_msg).await;
-        return Err(Error::Failed(Arc::new(e.into())));
+        // Terminal (recorded Failed): a bad repo/branch/permissions won't fix itself on
+        // retry; return Ok so we don't re-run an already-failed deployment.
+        return Ok(());
     }
 
     // Determine the actual source directory (respecting root_directory setting)
@@ -531,7 +765,10 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         if job.root_directory.contains("..") {
             let err_msg = "Root directory cannot contain '..' (path traversal not allowed)";
             handle_build_failure(&ctx, &job, err_msg).await;
-            return Err(Error::Failed(Arc::new(anyhow::anyhow!(err_msg).into())));
+            // Terminal: the deployment was already recorded as `Failed` above. Return Ok so
+        // the RetryLayer does NOT re-run a job that can only fail the same way (the Err
+        // contract is reserved for transient failures that were NOT recorded).
+        return Ok(());
         }
 
         // Strip leading slash if present
@@ -541,7 +778,10 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         if clean_root_dir.starts_with('/') || clean_root_dir.contains('\0') {
             let err_msg = "Invalid root directory path";
             handle_build_failure(&ctx, &job, err_msg).await;
-            return Err(Error::Failed(Arc::new(anyhow::anyhow!(err_msg).into())));
+            // Terminal: the deployment was already recorded as `Failed` above. Return Ok so
+        // the RetryLayer does NOT re-run a job that can only fail the same way (the Err
+        // contract is reserved for transient failures that were NOT recorded).
+        return Ok(());
         }
 
         let subdir = source_dir.join(clean_root_dir);
@@ -550,7 +790,10 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         if !subdir.exists() {
             let err_msg = format!("Root directory '{}' not found in repository", job.root_directory);
             handle_build_failure(&ctx, &job, &err_msg).await;
-            return Err(Error::Failed(Arc::new(anyhow::anyhow!(err_msg).into())));
+            // Terminal: the deployment was already recorded as `Failed` above. Return Ok so
+        // the RetryLayer does NOT re-run a job that can only fail the same way (the Err
+        // contract is reserved for transient failures that were NOT recorded).
+        return Ok(());
         }
 
         // SECURITY: Canonicalize and verify the path is within source_dir
@@ -559,7 +802,10 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
             Err(e) => {
                 let err_msg = format!("Failed to resolve root directory: {}", e);
                 handle_build_failure(&ctx, &job, &err_msg).await;
-                return Err(Error::Failed(Arc::new(anyhow::anyhow!(err_msg).into())));
+                // Terminal: the deployment was already recorded as `Failed` above. Return Ok so
+        // the RetryLayer does NOT re-run a job that can only fail the same way (the Err
+        // contract is reserved for transient failures that were NOT recorded).
+        return Ok(());
             }
         };
 
@@ -568,7 +814,10 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
             Err(e) => {
                 let err_msg = format!("Failed to resolve source directory: {}", e);
                 handle_build_failure(&ctx, &job, &err_msg).await;
-                return Err(Error::Failed(Arc::new(anyhow::anyhow!(err_msg).into())));
+                // Terminal: the deployment was already recorded as `Failed` above. Return Ok so
+        // the RetryLayer does NOT re-run a job that can only fail the same way (the Err
+        // contract is reserved for transient failures that were NOT recorded).
+        return Ok(());
             }
         };
 
@@ -576,7 +825,10 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         if !canonical_subdir.starts_with(&canonical_source) {
             let err_msg = "Root directory path escapes repository boundary (path traversal blocked)";
             handle_build_failure(&ctx, &job, err_msg).await;
-            return Err(Error::Failed(Arc::new(anyhow::anyhow!(err_msg).into())));
+            // Terminal: the deployment was already recorded as `Failed` above. Return Ok so
+        // the RetryLayer does NOT re-run a job that can only fail the same way (the Err
+        // contract is reserved for transient failures that were NOT recorded).
+        return Ok(());
         }
 
         log_to_db_and_ws(&ctx, job.deployment_id, format!("Using root directory: {}", job.root_directory)).await;
@@ -659,54 +911,87 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
         .await
         .ok();
 
-    // Build and deploy using flyctl (remote builder)
-    let db_clone = ctx.db.clone();
-    let events_clone = ctx.events.clone();
+    // Build and deploy using flyctl (remote builder).
+    //
+    // Build logs are funnelled through a single mpsc channel drained by one ordered
+    // consumer task that batches appends into one DB write per batch. The previous
+    // fire-and-forget `tokio::spawn`-per-line had no ordering guarantee (lines could be
+    // persisted out of order) and did one DB round-trip per line.
     let deployment_id = job.deployment_id;
+    let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let log_consumer = {
+        let db = ctx.db.clone();
+        let events = ctx.events.clone();
+        tokio::spawn(async move {
+            // Drain in order; coalesce whatever is already queued into one append.
+            while let Some(first) = log_rx.recv().await {
+                let mut batch = vec![first];
+                while let Ok(next) = log_rx.try_recv() {
+                    batch.push(next);
+                    if batch.len() >= 50 {
+                        break;
+                    }
+                }
+                // Publish to the live WS stream in order.
+                for line in &batch {
+                    events
+                        .publish_build_log(deployment_id, line, LogStream::Stdout)
+                        .await
+                        .ok();
+                }
+                // One batched, ordered DB append for the whole chunk.
+                let joined = batch.join("\n");
+                DeploymentRepository::append_log(&db, deployment_id, &joined)
+                    .await
+                    .ok();
+            }
+        })
+    };
 
     let on_log = move |msg: &str| {
-        let db = db_clone.clone();
-        let events = events_clone.clone();
-        let msg = msg.to_string();
-        tokio::spawn(async move {
-            DeploymentRepository::append_log(&db, deployment_id, &msg).await.ok();
-            events.publish_build_log(deployment_id, &msg, LogStream::Stdout).await.ok();
-        });
+        // Non-blocking, ordered hand-off to the consumer task.
+        let _ = log_tx.send(msg.to_string());
     };
 
     let plan_memory_ceiling = plan_memory_ceiling_mb(&ctx.db, job.server_id).await;
-    let build_result = flyctl::build_and_deploy(
-        &ctx.config,
-        &job,
-        &build_context,
-        &secrets,
-        plan_memory_ceiling,
-        on_log.clone(),
-    )
-    .await;
 
     // Judgment D: a built image and a started machine don't prove the MCP server
     // runs — a wrong entry path leaves the adapter listening while the child process
     // crash-loops, so the deploy looks successful but every request 500s. Probe a
     // real MCP initialize and demote a proven-broken server to a failure so it goes
     // through normal failure reporting instead of being shown as "succeeded".
-    let build_result = match build_result {
-        Ok(deploy_result) => {
-            match flyctl::verify_mcp_initialize(&deploy_result.endpoint_url, &job.mcp_path, &on_log).await {
-                flyctl::ProbeOutcome::Verified => Ok(deploy_result),
+    //
+    // The whole build+deploy+verify cycle is bounded by a hard timeout so a hung remote
+    // build or a never-resolving probe can't pin the worker or leave the deployment
+    // stuck in `Deploying` forever (the startup reaper is the backstop for crashes).
+    let build_result = match tokio::time::timeout(
+        std::time::Duration::from_secs(BUILD_DEPLOY_TIMEOUT_SECS),
+        async {
+            let deploy = flyctl::build_and_deploy(
+                &ctx.config,
+                &job,
+                &build_context,
+                &secrets,
+                plan_memory_ceiling,
+                &on_log,
+            )
+            .await?;
+
+            match flyctl::verify_mcp_initialize(&deploy.endpoint_url, &job.mcp_path, &on_log).await {
+                flyctl::ProbeOutcome::Verified => Ok(deploy),
                 flyctl::ProbeOutcome::Inconclusive(detail) => {
                     on_log(&format!(
                         "Warning: could not verify the MCP server responded; leaving as deployed. ({})",
                         detail
                     ));
-                    Ok(deploy_result)
+                    Ok(deploy)
                 }
                 flyctl::ProbeOutcome::Broken(detail) => {
                     // Surface the real reason: the adapter's 500 only says the child
                     // exited, so fetch the server's own logs and show the actual error
                     // (e.g. `Cannot find module '/app/dist/index.js'`) instead of a
                     // generic "check the server logs".
-                    let server_logs = flyctl::fetch_app_logs(&ctx.config, &deploy_result.app_name)
+                    let server_logs = flyctl::fetch_app_logs(&ctx.config, &deploy.app_name)
                         .await
                         .map(|l| flyctl::extract_error_lines(&l, 12))
                         .filter(|s| !s.is_empty());
@@ -728,9 +1013,22 @@ async fn handle_build_job(mut job: BuildJob, ctx: Data<Arc<BuilderContext>>) -> 
                     Err(anyhow::anyhow!(message))
                 }
             }
-        }
-        Err(e) => Err(e),
+        },
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => Err(anyhow::anyhow!(
+            "Build and deploy exceeded the {}-minute limit and was aborted. \
+            This usually means the build is hanging (e.g. an interactive prompt or an \
+            extremely large image).",
+            BUILD_DEPLOY_TIMEOUT_SECS / 60
+        )),
     };
+
+    // Stop the logger and flush any buffered lines before we write the final status.
+    drop(on_log);
+    log_consumer.await.ok();
 
     match build_result {
         Ok(deploy_result) => {
@@ -996,11 +1294,26 @@ fn extract_tarball(tarball: &[u8], dest: &std::path::Path) -> anyhow::Result<()>
             continue;
         }
 
+        // SECURITY: reject any member whose path tries to escape the destination via an
+        // absolute path or a `..` traversal (tar slip). A crafted archive could otherwise
+        // write outside `dest` (e.g. over /etc or the builder's own files).
+        use std::path::Component;
+        if path.components().any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
+            tracing::warn!("Skipping unsafe tarball entry: {}", path.display());
+            continue;
+        }
+
         // Strip the first component (the top-level directory)
         let components: Vec<_> = path.components().collect();
         if components.len() > 1 {
             let stripped: std::path::PathBuf = components[1..].iter().collect();
             let dest_path = dest.join(&stripped);
+
+            // Defence in depth: the resolved target must stay under `dest`.
+            if !dest_path.starts_with(dest) {
+                tracing::warn!("Skipping tarball entry escaping dest: {}", dest_path.display());
+                continue;
+            }
 
             if entry.header().entry_type().is_dir() {
                 std::fs::create_dir_all(&dest_path)?;
@@ -1338,6 +1651,16 @@ async fn handle_destroy_job(job: DestroyJob, ctx: Data<Arc<BuilderContext>>) -> 
         match flyctl::destroy_app(&ctx.config, &job.app_name).await {
             Ok(()) => {
                 tracing::info!("Fly.io app {} destroyed (server {})", job.app_name, job.server_id);
+                // Teardown confirmed — complete the soft-delete by hard-deleting the row.
+                // (The API only marked it `deleting`.) If this DB delete fails the row stays
+                // in `deleting` and the sweeper will retry; destroying a missing app is a no-op.
+                if let Err(e) = ServerRepository::delete(&ctx.db, job.server_id).await {
+                    tracing::error!(
+                        "Fly app {} destroyed but failed to hard-delete server row {}: {}",
+                        job.app_name, job.server_id, e
+                    );
+                    return Err(Error::Failed(Arc::new(e.into())));
+                }
                 return Ok(());
             }
             Err(e) => {

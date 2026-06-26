@@ -780,20 +780,16 @@ pub async fn delete(
         return Err(AppError::not_found("Server"));
     }
 
-    // Delete from database first (primary operation)
-    ServerRepository::delete(&state.db, path.server_id).await?;
+    // Soft-delete: mark the row `deleting` instead of hard-deleting it up front. The old
+    // flow deleted the DB row BEFORE the Fly teardown succeeded, so a transient Fly error
+    // left a permanently orphaned (billable) app with no record. Now the row survives until
+    // the builder confirms the app is gone (or a sweeper re-drives the teardown).
+    ServerRepository::mark_deleting(&state.db, path.server_id).await?;
 
-    // Tear down the Fly.io app via a durable, retrying job so a transient Fly error
-    // can't leave an orphaned app behind (the old inline best-effort destroy did).
-    // App name format: mcp-{first_part_of_uuid}
-    let server_id_str = path.server_id.to_string();
-    let app_name = format!(
-        "mcp-{}",
-        server_id_str
-            .split('-')
-            .next()
-            .unwrap_or(&server_id_str[..8.min(server_id_str.len())])
-    );
+    // Tear down the Fly.io app via a durable, retrying job. Use the PERSISTED app name so
+    // we never recompute it from a truncated UUID prefix (which collided across tenants and
+    // could delete another tenant's app).
+    let app_name = existing.fly_app_name.clone();
 
     let destroy_job = mcp_queue::DestroyJob {
         server_id: path.server_id,

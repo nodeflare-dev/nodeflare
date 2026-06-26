@@ -7,7 +7,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronLeft, KeyRound, Plus, Check, X, Search, ChevronDown } from 'lucide-react';
 import { api } from '@/lib/api';
-import { CreateAccessTokenRequest, CreateAccessTokenResponse, Workspace, McpServerMinimal } from '@/types';
+import { CreateAccessTokenRequest, CreateAccessTokenResponse, McpServerMinimal } from '@/types';
+import { useWorkspace } from '@/hooks/use-workspace';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -24,12 +25,8 @@ export default function NewAccessTokenPage() {
 
   useSetPageHeader(t('create.title'), <KeyRound className="w-4 h-4" />);
 
-  const { data: workspaces } = useQuery<Workspace[]>({
-    queryKey: ['workspaces'],
-    queryFn: () => api.get('/workspaces'),
-  });
-
-  const workspaceId = workspaces?.[0]?.id;
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id;
 
   const [name, setName] = useState('');
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);

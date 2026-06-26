@@ -115,6 +115,10 @@ pub enum ServerStatus {
     Running,
     Failed,
     Stopped,
+    /// Soft-deleted: the row is being torn down. The Fly app teardown runs (DestroyJob),
+    /// and only after it is confirmed is the row hard-deleted. Servers in this state are
+    /// treated as gone by the UI/proxy.
+    Deleting,
 }
 
 impl Default for ServerStatus {

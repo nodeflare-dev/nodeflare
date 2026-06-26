@@ -695,7 +695,10 @@ PersistentKeepalive = 15
     /// Get metrics for a specific app from Fly.io Prometheus API
     pub async fn get_metrics(&self, app_name: &str) -> Result<AppMetrics> {
         let now = chrono::Utc::now().timestamp();
-        let start = now - 3600; // Last 1 hour
+        // Last 24h, not 1h: servers scale to zero, so the machine is usually suspended and
+        // only produces metrics while it briefly runs. A wide window lets us surface the
+        // last-seen sample (the UI labels it "as of <time>") instead of an empty 0.
+        let start = now - 86_400;
 
         // Query memory metrics
         let memory_query = format!(
@@ -761,7 +764,14 @@ PersistentKeepalive = 15
             let status = response.status();
             let error = response.text().await.unwrap_or_default();
             tracing::warn!("Prometheus query failed: {} - {}", status, error);
-            return Ok(Vec::new());
+            // Don't swallow into an empty vec: a 401/403 (token lacks Prometheus scope) or a
+            // wrong org slug would otherwise be indistinguishable from "no data", surfacing as
+            // a misleading all-zero dashboard. Propagate so the cause is visible.
+            return Err(anyhow!(
+                "Prometheus query failed (status {}): {}",
+                status,
+                error.trim()
+            ));
         }
 
         let result: PrometheusResponse = response.json().await

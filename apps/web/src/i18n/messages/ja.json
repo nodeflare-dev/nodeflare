@@ -36,6 +36,32 @@
     "copied": "コピーしました！",
     "done": "完了"
   },
+  "workspace": {
+    "label": "ワークスペース",
+    "yourWorkspaces": "ワークスペース",
+    "createTeam": "チームを作成",
+    "createTeamTitle": "新しいチームを作成",
+    "createTeamDescription": "チームを使うと、共有ワークスペースで他のメンバーと共同作業できます。",
+    "nameLabel": "チーム名",
+    "namePlaceholder": "Acme Inc",
+    "slugLabel": "URL スラッグ",
+    "slugPlaceholder": "acme-inc",
+    "slugTaken": "このスラッグは既に使用されています。別のものを選択してください。",
+    "create": "チームを作成",
+    "creating": "作成中...",
+    "plan": {
+      "free": "Free",
+      "pro": "Pro",
+      "team": "Team",
+      "enterprise": "Enterprise"
+    },
+    "roles": {
+      "owner": "オーナー",
+      "admin": "管理者",
+      "member": "メンバー",
+      "viewer": "閲覧者"
+    }
+  },
   "nav": {
     "home": "ホーム",
     "dashboard": "ダッシュボード",
@@ -488,6 +514,10 @@
       "title": "メトリクス",
       "serverNotRunning": "サーバーが起動していません",
       "deployFirst": "メトリクスを表示するにはまずサーバーをデプロイしてください",
+      "idle": "サーバーはアイドル中です（ゼロスケール）",
+      "idleHint": "メトリクスはサーバーがリクエストを処理している間のみ表示されます。",
+      "lastSeen": "最終取得:",
+      "live": "ライブ",
       "loadError": "メトリクスの読み込みに失敗しました",
       "retry": "再試行",
       "refresh": "更新",

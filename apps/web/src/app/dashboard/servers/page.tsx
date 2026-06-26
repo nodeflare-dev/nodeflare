@@ -4,18 +4,12 @@ import { useQueries } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { api } from '@/lib/api';
 import { McpServerList } from '@/types';
+import { useWorkspace } from '@/hooks/use-workspace';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { SiNodedotjs, SiPython, SiGo, SiRust, SiDocker } from 'react-icons/si';
 import { Server, Plus, AlertCircle } from 'lucide-react';
-
-interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-  plan: string;
-}
 
 interface Plan {
   plan: string;
@@ -27,16 +21,14 @@ interface Plan {
 export default function ServersPage() {
   const t = useTranslations('servers');
 
+  const { activeWorkspace } = useWorkspace();
+
   // Fetch all data in parallel
-  const [serversQuery, workspacesQuery, plansQuery] = useQueries({
+  const [serversQuery, plansQuery] = useQueries({
     queries: [
       {
         queryKey: ['servers-list'],
         queryFn: () => api.get<McpServerList[]>('/servers/list'),
-      },
-      {
-        queryKey: ['workspaces'],
-        queryFn: () => api.get<Workspace[]>('/workspaces'),
       },
       {
         queryKey: ['billing-plans'],
@@ -46,12 +38,11 @@ export default function ServersPage() {
   });
 
   const servers = serversQuery.data;
-  const workspaces = workspacesQuery.data;
   const plans = plansQuery.data;
   const isLoading = serversQuery.isLoading;
   const isErrorServers = serversQuery.isError;
 
-  const currentWorkspace = workspaces?.[0];
+  const currentWorkspace = activeWorkspace;
   const currentPlanLimits = plans?.find(p => p.plan === (currentWorkspace?.plan || 'free'))?.limits;
   const maxServers = currentPlanLimits?.max_servers || 3;
   const currentServerCount = isErrorServers ? 0 : (servers?.length || 0);

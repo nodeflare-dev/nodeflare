@@ -4,13 +4,16 @@
 //! on the hot path of every proxy request.
 
 use fred::prelude::*;
-use mcp_db::{ApiKey, McpServer};
+use mcp_db::{ApiKey, McpServer, Workspace};
 use serde::{Deserialize, Serialize};
 
 /// Cache TTL for API keys (5 minutes)
 const API_KEY_CACHE_TTL_SECS: i64 = 300;
 /// Cache TTL for server metadata (30 seconds)
 const SERVER_CACHE_TTL_SECS: i64 = 30;
+/// Cache TTL for workspace plan/subscription used on the quota hot path (short so
+/// plan/subscription changes converge quickly without an explicit invalidate).
+const WORKSPACE_CACHE_TTL_SECS: i64 = 30;
 
 /// Cached API key data (subset of ApiKey for caching)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,33 +96,31 @@ impl From<&McpServer> for CachedServer {
 }
 
 impl CachedServer {
-    /// Convert back to McpServer (fills in non-cached fields with defaults)
-    pub fn to_mcp_server(&self) -> McpServer {
-        McpServer {
-            id: self.id,
-            workspace_id: self.workspace_id,
-            name: self.name.clone(),
-            slug: self.slug.clone(),
-            description: None,
-            github_repo: String::new(),
-            github_branch: String::new(),
-            github_installation_id: None,
-            runtime: "node".to_string(),
-            visibility: self.visibility.clone(),
-            access_mode: "public".to_string(),
-            status: self.status.clone(),
-            endpoint_url: self.endpoint_url.clone(),
-            rate_limit_per_minute: self.rate_limit_per_minute,
-            region: "nrt".to_string(),
-            root_directory: ".".to_string(),
-            mcp_path: self.mcp_path.clone(),
-            transport: "sse".to_string(),
-            entry_command: None,
-            build_command: None,
-            auth_enabled: self.auth_enabled,
-            memory_mb: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+    /// True when the server is in a state that can actually serve proxied traffic.
+    /// Scale-to-zero servers keep DB status `running` (Fly wakes the stopped Machine),
+    /// so only `running` is serveable; building/deploying/stopped/failed are not.
+    pub fn is_serveable(&self) -> bool {
+        self.status == "running"
+    }
+}
+
+/// Cached workspace plan/subscription data used by the quota hot path.
+/// Avoids a per-request Postgres read in `check_monthly_quota`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedWorkspace {
+    pub id: uuid::Uuid,
+    pub plan: String,
+    pub subscription_status: Option<String>,
+    pub current_period_end: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl From<&Workspace> for CachedWorkspace {
+    fn from(ws: &Workspace) -> Self {
+        Self {
+            id: ws.id,
+            plan: ws.plan.clone(),
+            subscription_status: ws.subscription_status.clone(),
+            current_period_end: ws.current_period_end,
         }
     }
 }
@@ -214,6 +215,42 @@ impl RedisCache {
     /// Invalidate all cached data for a server (call when server is updated)
     pub async fn invalidate_server_all(&self, slug: &str) {
         self.invalidate_server(slug).await;
+    }
+
+    /// Cache key for workspace plan/subscription lookup by id
+    fn workspace_cache_key(workspace_id: &uuid::Uuid) -> String {
+        format!("proxy:workspace:{}", workspace_id)
+    }
+
+    /// Get cached workspace plan/subscription by id
+    pub async fn get_workspace(&self, workspace_id: &uuid::Uuid) -> Option<CachedWorkspace> {
+        let cache_key = Self::workspace_cache_key(workspace_id);
+        let result: Option<String> = self.client.get(&cache_key).await.ok()?;
+        result.and_then(|json| serde_json::from_str(&json).ok())
+    }
+
+    /// Cache a workspace's plan/subscription with a short TTL
+    pub async fn set_workspace(&self, workspace: &Workspace) {
+        let cache_key = Self::workspace_cache_key(&workspace.id);
+        let cached = CachedWorkspace::from(workspace);
+        if let Ok(json) = serde_json::to_string(&cached) {
+            let _: Result<(), _> = self
+                .client
+                .set(
+                    &cache_key,
+                    json,
+                    Some(Expiration::EX(WORKSPACE_CACHE_TTL_SECS)),
+                    None,
+                    false,
+                )
+                .await;
+        }
+    }
+
+    /// Invalidate cached workspace plan/subscription (call when subscription changes)
+    pub async fn invalidate_workspace(&self, workspace_id: &uuid::Uuid) {
+        let cache_key = Self::workspace_cache_key(workspace_id);
+        let _: Result<(), _> = self.client.del(&cache_key).await;
     }
 }
 

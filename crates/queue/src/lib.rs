@@ -10,6 +10,9 @@ use uuid::Uuid;
 pub struct BuildJob {
     pub deployment_id: Uuid,
     pub server_id: Uuid,
+    /// Persisted Fly.io app name to deploy to. Carried on the job so the builder never
+    /// recomputes it from a truncated UUID prefix (which collided across tenants).
+    pub app_name: String,
     pub github_repo: String,
     pub github_branch: String,
     pub commit_sha: String,
@@ -47,6 +50,7 @@ impl BuildJob {
         Self {
             deployment_id,
             server_id: server.id,
+            app_name: server.fly_app_name.clone(),
             github_repo: server.github_repo.clone(),
             github_branch: server.github_branch.clone(),
             commit_sha,
@@ -68,6 +72,8 @@ impl BuildJob {
 pub struct DeployJob {
     pub deployment_id: Uuid,
     pub server_id: Uuid,
+    /// Persisted Fly.io app name to deploy to (never recomputed from the UUID prefix).
+    pub app_name: String,
     pub image_url: String,
     pub secrets: Vec<SecretEnv>,
     /// Target region for deployment

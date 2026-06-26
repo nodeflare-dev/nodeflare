@@ -11,7 +11,7 @@ use bytes::Bytes;
 use fred::interfaces::ClientLike;
 use futures::StreamExt;
 use mcp_common::{AppConfig, McpMethod};
-use mcp_db::{McpServer, ServerRepository};
+use mcp_db::ServerRepository;
 use auth::AuthCredential;
 use serde::Serialize;
 use std::sync::Arc;
@@ -27,15 +27,20 @@ mod rate_limit;
 mod redis_cache;
 
 use cache::{RequestCache, CoalesceResult};
-use redis_cache::RedisCache;
+use redis_cache::{RedisCache, CachedServer};
 
 pub struct ProxyState {
     pub config: AppConfig,
     pub db: mcp_db::DbPool,
     pub redis: fred::prelude::RedisClient,
     pub http_client: reqwest::Client,
+    /// Long-lived client for SSE/streaming upstream requests (idle timeout, no total
+    /// timeout). Built once and reused so connections are pooled across requests.
+    pub sse_client: reqwest::Client,
     pub request_cache: RequestCache,
     pub redis_cache: RedisCache,
+    /// Maximum request body size accepted from clients / read from upstreams.
+    pub body_limit: usize,
 }
 
 #[tokio::main]
@@ -88,8 +93,32 @@ async fn main() -> Result<()> {
     redis.wait_for_connect().await?;
     tracing::info!("Redis connected successfully with auto-reconnect enabled");
 
+    // Upstream timeout is configurable; long-running tool calls were being cut at the
+    // old hard-coded 30s. Also set a pool idle timeout so we don't pin dead connections.
+    let upstream_timeout_secs: u64 = std::env::var("PROXY_UPSTREAM_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    let pool_idle_timeout_secs: u64 = std::env::var("PROXY_POOL_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(90);
     let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(upstream_timeout_secs))
+        .pool_idle_timeout(std::time::Duration::from_secs(pool_idle_timeout_secs))
+        .build()?;
+
+    // SSE/streaming client: built once and reused (was previously rebuilt per
+    // request, defeating connection pooling). No total timeout — MCP SSE streams are
+    // legitimately long-lived — but a read (idle) timeout drops silently hung upstreams.
+    let sse_idle_timeout_secs: u64 = std::env::var("PROXY_SSE_IDLE_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(120);
+    let sse_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(sse_idle_timeout_secs))
+        .pool_idle_timeout(std::time::Duration::from_secs(pool_idle_timeout_secs))
         .build()?;
 
     // Request cache: TTL and max entries from environment
@@ -106,20 +135,22 @@ async fn main() -> Result<()> {
     // Redis cache for API keys and server metadata
     let redis_cache = RedisCache::new(redis.clone());
 
-    let state = Arc::new(ProxyState {
-        config: config.clone(),
-        db: db_pool,
-        redis,
-        http_client,
-        request_cache,
-        redis_cache,
-    });
-
     // Get request body limit from env (default: 10MB for proxy)
     let body_limit: usize = std::env::var("PROXY_BODY_LIMIT_BYTES")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(10 * 1024 * 1024); // 10MB default for proxy
+
+    let state = Arc::new(ProxyState {
+        config: config.clone(),
+        db: db_pool,
+        redis,
+        http_client,
+        sse_client,
+        request_cache,
+        redis_cache,
+        body_limit,
+    });
 
     let app = Router::new()
         .route("/health", any(health_check))
@@ -287,12 +318,20 @@ async fn proxy_handler(
 
     // Detect browser access and redirect to main site
     // Browsers send Accept: text/html, while MCP clients send Accept: application/json or text/event-stream
+    // Only treat it as a browser navigation when it asks for HTML and does NOT also
+    // accept an MCP content type. MCP clients send Accept: application/json and/or
+    // text/event-stream, so requiring their absence avoids redirecting a real MCP
+    // client that happens to include text/html in a broad Accept header.
     let is_browser = request.method() == axum::http::Method::GET
         && request
             .headers()
             .get(axum::http::header::ACCEPT)
             .and_then(|v| v.to_str().ok())
-            .map(|accept| accept.contains("text/html"))
+            .map(|accept| {
+                accept.contains("text/html")
+                    && !accept.contains("application/json")
+                    && !accept.contains("text/event-stream")
+            })
             .unwrap_or(false);
 
     if is_browser {
@@ -329,6 +368,17 @@ async fn proxy_handler(
     let server = resolve_server(&state, &server_slug).await?;
     tracing::info!("proxy_handler: server resolved, id={}, auth_enabled={}", server.id, server.auth_enabled);
 
+    // 2b. Status gate: only serve servers that are actually running. Without this a
+    // stopped/building/failed/deleting server would keep accepting traffic (and pay
+    // the full upstream timeout failing) instead of returning promptly.
+    if !server.is_serveable() {
+        tracing::warn!("proxy_handler: server {} not serveable (status={})", server.id, server.status);
+        return Err(ProxyError::ServiceUnavailable(format!(
+            "Server is not running (status: {})",
+            server.status
+        )));
+    }
+
     // 3. Handle auth based on server.auth_enabled setting
     let credential: Option<AuthCredential> = if server.auth_enabled {
         // Auth enabled: Extract and validate API key
@@ -364,12 +414,16 @@ async fn proxy_handler(
         None
     };
 
-    // 4. Check monthly quota based on workspace plan - graceful degradation on Redis errors
-    // (This applies regardless of auth_enabled to prevent abuse)
+    // 4. Atomically check + increment the monthly quota before forwarding.
+    // (This applies regardless of auth_enabled to prevent abuse.) Incrementing
+    // inline avoids the previous check-then-fire-and-forget TOCTOU; on a hard
+    // (non-quota) error we fail open but log.
     tracing::debug!("proxy_handler: checking monthly quota");
-    match rate_limit::check_monthly_quota(&state, server.workspace_id).await {
+    match rate_limit::check_and_increment_monthly_quota(&state, server.workspace_id).await {
         Ok(_) => tracing::debug!("proxy_handler: monthly quota check passed"),
-        Err(ProxyError::QuotaExceeded(msg)) => return Err(ProxyError::QuotaExceeded(msg)),
+        Err(e @ ProxyError::QuotaExceeded(_)) => return Err(e),
+        Err(e @ ProxyError::PaymentRequired(_)) => return Err(e),
+        Err(e @ ProxyError::RateLimitExceeded) => return Err(e),
         Err(e) => tracing::warn!("proxy_handler: monthly quota check failed (continuing anyway): {}", e),
     }
 
@@ -388,24 +442,18 @@ async fn proxy_handler(
     let target_url = format!("{}/{}{}", endpoint_url.trim_end_matches('/'), mcp_path, query);
     tracing::info!("proxy_handler: forwarding request to {}", target_url);
 
-    // 6. Forward request (with or without scope check depending on auth)
-    let (response, mcp_info) = if let Some(ref cred) = credential {
-        forward_request(&state, &target_url, request, cred).await?
-    } else {
-        forward_request_no_auth(&state, &target_url, request).await?
+    // 6. Forward request. Scope checks only apply when NodeFlare auth is enabled
+    // (credential present); otherwise the upstream handles its own auth.
+    let fwd = ForwardContext {
+        auth_enabled: server.auth_enabled,
+        client_ip: &client_ip,
+        host: &host,
     };
+    let (response, mcp_info) =
+        forward_request(&state, &target_url, request, credential.as_ref(), &fwd).await?;
     tracing::info!("proxy_handler: request forwarded, status={}", response.status());
 
-    // 7. Increment monthly counter on success (async, don't block response)
-    if response.status().is_success() {
-        let state_clone = state.clone();
-        let workspace_id = server.workspace_id;
-        tokio::spawn(async move {
-            if let Err(e) = rate_limit::increment_monthly_counter(&state_clone, workspace_id).await {
-                tracing::warn!("Failed to increment monthly counter: {}", e);
-            }
-        });
-    }
+    // 7. Monthly quota is already incremented atomically in step 4 (before forwarding).
 
     // 8. Log request (async, don't block)
     let duration_ms = start.elapsed().as_millis() as i32;
@@ -439,14 +487,14 @@ async fn proxy_handler(
     Ok(response)
 }
 
-async fn resolve_server(state: &ProxyState, slug: &str) -> Result<McpServer, ProxyError> {
+async fn resolve_server(state: &ProxyState, slug: &str) -> Result<CachedServer, ProxyError> {
     tracing::debug!("resolve_server: looking up slug={}", slug);
 
     // Try Redis cache first
     let cache_start = Instant::now();
     if let Some(cached) = state.redis_cache.get_server(slug).await {
         tracing::debug!("resolve_server: cache HIT for slug={} (took {:?})", slug, cache_start.elapsed());
-        return Ok(cached.to_mcp_server());
+        return Ok(cached);
     }
     tracing::debug!("resolve_server: cache MISS for slug={} (took {:?})", slug, cache_start.elapsed());
 
@@ -474,7 +522,7 @@ async fn resolve_server(state: &ProxyState, slug: &str) -> Result<McpServer, Pro
         redis_cache.set_server(&slug_owned, &server_clone).await;
     });
 
-    Ok(server)
+    Ok(CachedServer::from(&server))
 }
 
 /// Extracted MCP request info for scope checking and logging
@@ -483,6 +531,8 @@ struct McpRequestInfo {
     method: McpMethod,
     method_str: Option<String>,
     target: Option<String>,
+    /// The JSON-RPC request `id`, echoed back in error responses for correlation.
+    id: Option<serde_json::Value>,
 }
 
 /// Extract MCP method and target from JSON-RPC request body
@@ -491,9 +541,11 @@ fn extract_mcp_request_info(body: &[u8]) -> McpRequestInfo {
         method: McpMethod::Unknown,
         method_str: None,
         target: None,
+        id: None,
     };
 
     if let Ok(json) = serde_json::from_slice::<serde_json::Value>(body) {
+        info.id = json.get("id").cloned();
         if let Some(method_str) = json.get("method").and_then(|m| m.as_str()) {
             info.method_str = Some(method_str.to_string());
             info.method = McpMethod::parse(method_str);
@@ -594,22 +646,151 @@ fn is_sse_request(headers: &axum::http::HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+/// Per-request context needed to build sanitized upstream headers.
+struct ForwardContext<'a> {
+    /// Whether NodeFlare validated the credential (so the client `Authorization`
+    /// should be stripped) vs. the upstream doing its own auth (forward it).
+    auth_enabled: bool,
+    client_ip: &'a str,
+    host: &'a str,
+}
+
+/// Hop-by-hop headers (RFC 7230 §6.1) — must not be forwarded by a proxy.
+const HOP_BY_HOP_HEADERS: &[&str] = &[
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+];
+
+/// Build the sanitized header set to send upstream: drop hop-by-hop headers (and any
+/// header named in the inbound `Connection` token list), strip the client
+/// `Authorization` only when NodeFlare did the auth, and add `X-Forwarded-*`.
+fn build_upstream_headers(inbound: &axum::http::HeaderMap, fwd: &ForwardContext) -> axum::http::HeaderMap {
+    // Headers explicitly listed as connection-tokens must also be dropped.
+    let mut conn_tokens: Vec<String> = Vec::new();
+    if let Some(conn) = inbound.get("connection").and_then(|v| v.to_str().ok()) {
+        for tok in conn.split(',') {
+            let t = tok.trim().to_ascii_lowercase();
+            if !t.is_empty() {
+                conn_tokens.push(t);
+            }
+        }
+    }
+
+    let mut out = axum::http::HeaderMap::new();
+    for (name, value) in inbound.iter() {
+        let lname = name.as_str().to_ascii_lowercase();
+        // `host` is set by the HTTP client from the target URL; `x-forwarded-for` is
+        // rebuilt below to append our hop.
+        if lname == "host" || lname == "x-forwarded-for" {
+            continue;
+        }
+        if HOP_BY_HOP_HEADERS.contains(&lname.as_str()) {
+            continue;
+        }
+        if conn_tokens.iter().any(|t| t == &lname) {
+            continue;
+        }
+        // Strip the client's Authorization only when we authenticated the request.
+        // When the upstream does its own auth (auth_enabled=false), forward it.
+        if lname == "authorization" && fwd.auth_enabled {
+            continue;
+        }
+        out.append(name.clone(), value.clone());
+    }
+
+    // X-Forwarded-For: append our observed client IP to any existing chain.
+    let xff = match inbound.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        Some(existing) if !existing.trim().is_empty() => format!("{}, {}", existing, fwd.client_ip),
+        _ => fwd.client_ip.to_string(),
+    };
+    if let Ok(v) = HeaderValue::from_str(&xff) {
+        out.insert("x-forwarded-for", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(fwd.host) {
+        out.insert("x-forwarded-host", v);
+    }
+    out.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+
+    out
+}
+
+/// Canonical cache-key body: strip the volatile JSON-RPC `id` and `jsonrpc` fields so
+/// two otherwise-identical requests (differing only by id) share one cache entry.
+/// (serde_json's Value map orders keys, so the encoding is stable.)
+fn jsonrpc_cache_key_body(body: &[u8]) -> Vec<u8> {
+    if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(body) {
+        if let Some(obj) = v.as_object_mut() {
+            obj.remove("id");
+            obj.remove("jsonrpc");
+            if let Ok(s) = serde_json::to_vec(&v) {
+                return s;
+            }
+        }
+    }
+    body.to_vec()
+}
+
+/// Strip the `id` from a JSON-RPC response so the cached copy is id-agnostic.
+fn strip_jsonrpc_id(body: &[u8]) -> Vec<u8> {
+    if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(body) {
+        if let Some(obj) = v.as_object_mut() {
+            if obj.remove("id").is_some() {
+                if let Ok(s) = serde_json::to_vec(&v) {
+                    return s;
+                }
+            }
+        }
+    }
+    body.to_vec()
+}
+
+/// Re-inject the caller's JSON-RPC `id` into a cached (id-stripped) response body.
+fn inject_jsonrpc_id(body: &[u8], id: Option<&serde_json::Value>) -> Vec<u8> {
+    if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(body) {
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert(
+                "id".to_string(),
+                id.cloned().unwrap_or(serde_json::Value::Null),
+            );
+            if let Ok(s) = serde_json::to_vec(&v) {
+                return s;
+            }
+        }
+    }
+    body.to_vec()
+}
+
+/// Forward a request to the upstream MCP server.
+///
+/// `credential` is `Some` when NodeFlare auth is enabled (scope checks apply) and
+/// `None` when the upstream handles its own auth. This single function replaces the
+/// previously-duplicated `forward_request` / `forward_request_no_auth`.
 async fn forward_request(
     state: &ProxyState,
     target_url: &str,
     request: Request<Body>,
-    credential: &AuthCredential,
+    credential: Option<&AuthCredential>,
+    fwd: &ForwardContext<'_>,
 ) -> Result<(Response, McpRequestInfo), ProxyError> {
     let method = request.method().clone();
-    let mut headers = request.headers().clone();
-    let is_sse = is_sse_request(&headers);
+    let inbound_headers = request.headers().clone();
+    let is_sse = is_sse_request(&inbound_headers);
 
-    // Read body
-    let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
+    // Sanitize headers once (hop-by-hop strip, Authorization policy, X-Forwarded-*).
+    let mut headers = build_upstream_headers(&inbound_headers, fwd);
+
+    // Read body (limit comes from configuration, not a hard-coded constant).
+    let body_bytes = axum::body::to_bytes(request.into_body(), state.body_limit)
         .await
         .map_err(|e| ProxyError::BadRequest(format!("Failed to read body: {}", e)))?;
 
-    tracing::info!("forward_request: method={}, is_sse={}", method, is_sse);
+    tracing::info!("forward_request: method={}, is_sse={}, auth={}", method, is_sse, fwd.auth_enabled);
     // Request body may contain sensitive data (tool args, secrets, PII) — log only at DEBUG
     if tracing::enabled!(tracing::Level::DEBUG) {
         let req_body_preview = if body_bytes.len() > 500 {
@@ -620,11 +801,16 @@ async fn forward_request(
         tracing::debug!("forward_request: request_body={}", req_body_preview);
     }
 
-    // Extract MCP request info (method + target)
+    // Extract MCP request info (method + target + id)
     let mcp_info = extract_mcp_request_info(&body_bytes);
 
-    // Check scope permission before forwarding
-    check_scope_permission(credential, &mcp_info)?;
+    // Check scope permission before forwarding (only when we did the auth).
+    if let Some(cred) = credential {
+        if let Err(e) = check_scope_permission(cred, &mcp_info) {
+            // Echo the inbound request id so the client can correlate the error.
+            return Ok((error_response_with_id(e, mcp_info.id.as_ref()), mcp_info));
+        }
+    }
 
     // Session affinity: pin a stateful session to the Fly Machine that owns it.
     let is_initialize = mcp_info.method_str.as_deref() == Some("initialize");
@@ -654,30 +840,37 @@ async fn forward_request(
         McpMethod::ToolsList | McpMethod::ResourcesList | McpMethod::PromptsList
     );
 
-    // Try request coalescing + caching for cacheable requests
+    // Try request coalescing + caching for cacheable requests.
+    // The cache is keyed on an id-stripped body and stored without an id, so cache
+    // hits never leak another caller's JSON-RPC id — we re-inject the caller's id.
     if is_cacheable {
-        match state.request_cache.try_coalesce(target_url, &body_bytes).await {
+        let key_body = jsonrpc_cache_key_body(&body_bytes);
+        match state.request_cache.try_coalesce(target_url, &key_body).await {
             CoalesceResult::Cached(cached) => {
                 tracing::debug!("Cache hit for {}", target_url);
-                let response = build_response_from_cache(&cached)?;
+                let body = inject_jsonrpc_id(&cached.body, mcp_info.id.as_ref());
+                let response = build_response(cached.status, &cached.headers, body)?;
                 return Ok((response, mcp_info));
             }
             CoalesceResult::Coalesced(cached) => {
                 tracing::debug!("Request coalesced for {}", target_url);
-                let response = build_response_from_cache(&cached)?;
+                let body = inject_jsonrpc_id(&cached.body, mcp_info.id.as_ref());
+                let response = build_response(cached.status, &cached.headers, body)?;
                 return Ok((response, mcp_info));
             }
             CoalesceResult::Execute(handle) => {
                 // Execute the request and cache the result
                 match execute_upstream_request(state, target_url, method, &headers, body_bytes).await {
                     Ok((response_body, status, response_headers)) => {
-                        // Cache successful responses only
+                        // Cache successful responses only, storing an id-stripped copy.
                         if status >= 200 && status < 300 {
-                            state.request_cache.complete(handle, response_body.clone(), status, response_headers.clone()).await;
+                            let cacheable = strip_jsonrpc_id(&response_body);
+                            state.request_cache.complete(handle, cacheable, status, response_headers.clone()).await;
                         } else {
                             state.request_cache.cancel(handle).await;
                         }
 
+                        // Serve this caller its own (correct-id) response unchanged.
                         let response = build_response(status, &response_headers, response_body)?;
                         return Ok((response, mcp_info));
                     }
@@ -702,128 +895,6 @@ async fn forward_request(
 
     let response = build_response(status, &response_headers, response_body)?;
     Ok((response, mcp_info))
-}
-
-/// Forward request without authentication checks (for servers with auth_enabled=false)
-/// The MCP server handles its own authentication
-async fn forward_request_no_auth(
-    state: &ProxyState,
-    target_url: &str,
-    request: Request<Body>,
-) -> Result<(Response, McpRequestInfo), ProxyError> {
-    let method = request.method().clone();
-    let mut headers = request.headers().clone();
-    let is_sse = is_sse_request(&headers);
-
-    // Read body
-    let body_bytes = axum::body::to_bytes(request.into_body(), 10 * 1024 * 1024)
-        .await
-        .map_err(|e| ProxyError::BadRequest(format!("Failed to read body: {}", e)))?;
-
-    tracing::info!("forward_request_no_auth: method={}, is_sse={}", method, is_sse);
-    // Request body may contain sensitive data (tool args, secrets, PII) — log only at DEBUG
-    if tracing::enabled!(tracing::Level::DEBUG) {
-        let req_body_preview = if body_bytes.len() > 500 {
-            format!("{}... (truncated)", String::from_utf8_lossy(&body_bytes[..500]))
-        } else {
-            String::from_utf8_lossy(&body_bytes).to_string()
-        };
-        tracing::debug!("forward_request_no_auth: request_body={}", req_body_preview);
-    }
-
-    // Extract MCP request info (method + target) for logging purposes
-    let mcp_info = extract_mcp_request_info(&body_bytes);
-
-    // Skip scope permission check - auth is handled by the MCP server itself
-
-    // Session affinity: pin a stateful session to the Fly Machine that owns it.
-    let is_initialize = mcp_info.method_str.as_deref() == Some("initialize");
-    let affinity = affinity::decide(state, target_url, &headers, is_initialize).await;
-    if let Some(machine) = affinity.forced_machine.as_deref() {
-        if let Ok(value) = HeaderValue::from_str(machine) {
-            headers.insert("fly-force-instance-id", value);
-            tracing::info!("affinity: forcing instance {}", machine);
-        }
-    }
-
-    // SSE requests: use streaming (no buffering, minimal latency)
-    if is_sse {
-        tracing::info!("SSE request detected, using streaming forward to {}", target_url);
-        let response = execute_streaming_request(state, target_url, method, &headers, body_bytes).await?;
-        let session_id = response
-            .headers()
-            .get("mcp-session-id")
-            .and_then(|v| v.to_str().ok());
-        affinity::capture_session(state, &affinity, session_id).await;
-        return Ok((response, mcp_info));
-    }
-
-    // Only cache read-only MCP methods (list operations)
-    let is_cacheable = matches!(
-        mcp_info.method,
-        McpMethod::ToolsList | McpMethod::ResourcesList | McpMethod::PromptsList
-    );
-
-    // Try request coalescing + caching for cacheable requests
-    if is_cacheable {
-        match state.request_cache.try_coalesce(target_url, &body_bytes).await {
-            CoalesceResult::Cached(cached) => {
-                tracing::debug!("Cache hit for {}", target_url);
-                let response = build_response_from_cache(&cached)?;
-                return Ok((response, mcp_info));
-            }
-            CoalesceResult::Coalesced(cached) => {
-                tracing::debug!("Request coalesced for {}", target_url);
-                let response = build_response_from_cache(&cached)?;
-                return Ok((response, mcp_info));
-            }
-            CoalesceResult::Execute(handle) => {
-                // Execute the request and cache the result
-                match execute_upstream_request(state, target_url, method, &headers, body_bytes).await {
-                    Ok((response_body, status, response_headers)) => {
-                        // Cache successful responses only
-                        if status >= 200 && status < 300 {
-                            state.request_cache.complete(handle, response_body.clone(), status, response_headers.clone()).await;
-                        } else {
-                            state.request_cache.cancel(handle).await;
-                        }
-
-                        let response = build_response(status, &response_headers, response_body)?;
-                        return Ok((response, mcp_info));
-                    }
-                    Err(e) => {
-                        state.request_cache.cancel(handle).await;
-                        return Err(e);
-                    }
-                }
-            }
-        }
-    }
-
-    // Non-cacheable requests: execute directly
-    let (response_body, status, response_headers) =
-        execute_upstream_request(state, target_url, method, &headers, body_bytes).await?;
-
-    let session_id = response_headers
-        .iter()
-        .find(|(k, _)| k == "mcp-session-id")
-        .map(|(_, v)| v.as_str());
-    affinity::capture_session(state, &affinity, session_id).await;
-
-    let response = build_response(status, &response_headers, response_body)?;
-    Ok((response, mcp_info))
-}
-
-/// Build response from cached data
-fn build_response_from_cache(cached: &cache::CachedResponse) -> Result<Response, ProxyError> {
-    let mut builder = Response::builder().status(cached.status);
-    for (name, value) in &cached.headers {
-        builder = builder.header(name.as_str(), value.as_str());
-    }
-    // Bytes implements Into<Body> efficiently without copying
-    builder
-        .body(Body::from(cached.body.clone()))
-        .map_err(|e| ProxyError::Internal(e.to_string()))
 }
 
 /// Build response from raw parts
@@ -845,14 +916,11 @@ async fn execute_upstream_request(
     headers: &axum::http::HeaderMap,
     body_bytes: Bytes,
 ) -> Result<(Vec<u8>, u16, Vec<(String, String)>), ProxyError> {
-    // Build outgoing request
+    // Build outgoing request. `headers` is already sanitized by build_upstream_headers
+    // (hop-by-hop stripped, Authorization policy applied, X-Forwarded-* added).
     let mut req_builder = state.http_client.request(method, target_url);
-
-    // Copy relevant headers
     for (name, value) in headers.iter() {
-        if name != "host" && name != "authorization" {
-            req_builder = req_builder.header(name, value);
-        }
+        req_builder = req_builder.header(name, value);
     }
 
     req_builder = req_builder.body(body_bytes);
@@ -905,36 +973,21 @@ async fn execute_upstream_request(
 /// Execute streaming request for SSE (Server-Sent Events)
 /// Streams response directly without buffering for minimal latency
 async fn execute_streaming_request(
-    _state: &ProxyState,
+    state: &ProxyState,
     target_url: &str,
     method: axum::http::Method,
     headers: &axum::http::HeaderMap,
     body_bytes: Bytes,
 ) -> Result<Response, ProxyError> {
-    // Build outgoing request for SSE/streaming.
-    // No *total* timeout: MCP SSE streams (event channel + long tool calls) are
-    // legitimately long-lived. Instead guard against stalled upstreams:
-    //   - connect_timeout: bound TCP/TLS setup to the upstream edge.
-    //   - read_timeout: idle timeout that resets on every chunk/keepalive, so a
-    //     healthy stream stays open indefinitely while a silent (hung) upstream is
-    //     dropped instead of hanging forever (the failure we observed).
-    let sse_idle_timeout_secs = std::env::var("PROXY_SSE_IDLE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(120);
-    let sse_client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(sse_idle_timeout_secs))
-        .build()
-        .map_err(|e| ProxyError::Internal(format!("Failed to create SSE client: {}", e)))?;
+    // Reuse the shared, long-lived SSE client (built once at startup with a
+    // connect_timeout + read/idle timeout and no total timeout) so connections are
+    // pooled across requests instead of rebuilt per request.
+    let mut req_builder = state.sse_client.request(method, target_url);
 
-    let mut req_builder = sse_client.request(method, target_url);
-
-    // Copy relevant headers (including Accept for SSE)
+    // `headers` is already sanitized (hop-by-hop stripped, Authorization policy
+    // applied, X-Forwarded-* added), and still carries Accept for SSE.
     for (name, value) in headers.iter() {
-        if name != "host" && name != "authorization" {
-            req_builder = req_builder.header(name, value);
-        }
+        req_builder = req_builder.header(name, value);
     }
 
     req_builder = req_builder.body(body_bytes);
@@ -1050,7 +1103,17 @@ impl std::fmt::Display for ProxyError {
 
 impl IntoResponse for ProxyError {
     fn into_response(self) -> Response {
-        let (status, message, error_code, www_authenticate) = match &self {
+        // No request context here, so the id can't be correlated; callers that know
+        // the inbound JSON-RPC id use `error_response_with_id` instead.
+        error_response_with_id(self, None)
+    }
+}
+
+/// Render a `ProxyError` as a JSON-RPC 2.0 error, echoing the caller's request `id`
+/// when known (so clients can correlate the error with their request).
+fn error_response_with_id(err: ProxyError, id: Option<&serde_json::Value>) -> Response {
+    {
+        let (status, message, error_code, www_authenticate) = match &err {
             ProxyError::Unauthorized(m, host) => {
                 // Include WWW-Authenticate header for OAuth 2.1 compliance (RFC 9728)
                 let resource_metadata_url = match host {
@@ -1102,10 +1165,10 @@ impl IntoResponse for ProxyError {
             _ => -32603,                            // Internal error
         };
 
-        // JSON-RPC 2.0 compliant error response
+        // JSON-RPC 2.0 compliant error response (echo the inbound id when known)
         let body = serde_json::json!({
             "jsonrpc": "2.0",
-            "id": null,
+            "id": id.cloned().unwrap_or(serde_json::Value::Null),
             "error": {
                 "code": jsonrpc_code,
                 "message": message,

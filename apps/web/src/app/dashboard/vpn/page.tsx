@@ -7,12 +7,7 @@ import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Shield, Check, Trash2 } from 'lucide-react';
-
-interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-}
+import { useWorkspace } from '@/hooks/use-workspace';
 
 interface WireGuardPeer {
   name: string;
@@ -38,12 +33,9 @@ export default function VPNPage() {
   const [copied, setCopied] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
-  const { data: workspaces, isLoading: isLoadingWorkspaces } = useQuery<Workspace[]>({
-    queryKey: ['workspaces'],
-    queryFn: () => api.get('/workspaces'),
-  });
+  const { activeWorkspace, isLoading: isLoadingWorkspaces } = useWorkspace();
 
-  const workspaceId = workspaces?.[0]?.id;
+  const workspaceId = activeWorkspace?.id;
 
   const { data: peers, isLoading: isLoadingPeers } = useQuery<WireGuardPeer[]>({
     queryKey: ['wireguard-peers', workspaceId],
