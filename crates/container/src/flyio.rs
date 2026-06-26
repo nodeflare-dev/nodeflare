@@ -67,6 +67,37 @@ impl FlyioRuntime {
         Ok(())
     }
 
+    /// Provisioned memory (MB) of every *started* machine in an app. Used by the usage
+    /// sampler: billing follows actual running machines, so it naturally captures HA
+    /// replicas (2 started machines = 2x) and any detection-driven memory bump, and bills
+    /// nothing while auto-stop has the app idle. A missing app yields an empty list.
+    pub async fn list_started_machine_memory_mb(&self, app_name: &str) -> Result<Vec<u32>> {
+        let response = self
+            .http_client
+            .get(format!("{}/apps/{}/machines", FLY_API_URL, app_name))
+            .header("Authorization", format!("Bearer {}", self.api_token))
+            .send()
+            .await
+            .context("Failed to list machines")?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        if !response.status().is_success() {
+            let status = response.status();
+            let error = response.text().await.unwrap_or_default();
+            anyhow::bail!("{}", log_and_sanitize_error("List machines", status, &error));
+        }
+
+        let machines: Vec<MachineListItem> =
+            response.json().await.context("Failed to parse machines list")?;
+        Ok(machines
+            .into_iter()
+            .filter(|m| m.state == "started")
+            .map(|m| m.config.guest.memory_mb)
+            .collect())
+    }
+
     /// Encode app_name and machine_id into a single ID string
     fn encode_id(app_name: &str, machine_id: &str) -> String {
         format!("{}:{}", app_name, machine_id)
@@ -123,6 +154,26 @@ struct MachineResponse {
     #[allow(dead_code)]
     name: String,
     state: String,
+}
+
+/// Subset of the Fly machine object we need to bill running time (state + memory).
+#[derive(Debug, Deserialize)]
+struct MachineListItem {
+    state: String,
+    #[serde(default)]
+    config: MachineListConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MachineListConfig {
+    #[serde(default)]
+    guest: MachineListGuest,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct MachineListGuest {
+    #[serde(default)]
+    memory_mb: u32,
 }
 
 #[async_trait::async_trait]
@@ -644,7 +695,10 @@ PersistentKeepalive = 15
     /// Get metrics for a specific app from Fly.io Prometheus API
     pub async fn get_metrics(&self, app_name: &str) -> Result<AppMetrics> {
         let now = chrono::Utc::now().timestamp();
-        let start = now - 3600; // Last 1 hour
+        // Last 24h, not 1h: servers scale to zero, so the machine is usually suspended and
+        // only produces metrics while it briefly runs. A wide window lets us surface the
+        // last-seen sample (the UI labels it "as of <time>") instead of an empty 0.
+        let start = now - 86_400;
 
         // Query memory metrics
         let memory_query = format!(
@@ -692,10 +746,20 @@ PersistentKeepalive = 15
             self.org_slug
         );
 
+        // Fly's Prometheus endpoint is strict about the auth scheme. Modern Fly tokens are
+        // macaroons that already carry the `FlyV1 ` scheme, so they must be sent verbatim;
+        // wrapping them as `Bearer FlyV1 ...` yields 401 "resolving organization". (The
+        // Machines/GraphQL endpoints tolerate the Bearer wrapper, so only this call needs it.)
+        let auth_header = if self.api_token.starts_with("FlyV1 ") {
+            self.api_token.clone()
+        } else {
+            format!("Bearer {}", self.api_token)
+        };
+
         let response = self
             .http_client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.api_token))
+            .header("Authorization", auth_header)
             .query(&[
                 ("query", query),
                 ("start", &start.to_string()),
@@ -710,7 +774,14 @@ PersistentKeepalive = 15
             let status = response.status();
             let error = response.text().await.unwrap_or_default();
             tracing::warn!("Prometheus query failed: {} - {}", status, error);
-            return Ok(Vec::new());
+            // Don't swallow into an empty vec: a 401/403 (token lacks Prometheus scope) or a
+            // wrong org slug would otherwise be indistinguishable from "no data", surfacing as
+            // a misleading all-zero dashboard. Propagate so the cause is visible.
+            return Err(anyhow!(
+                "Prometheus query failed (status {}): {}",
+                status,
+                error.trim()
+            ));
         }
 
         let result: PrometheusResponse = response.json().await

@@ -11,6 +11,7 @@ path = "src/main.rs"
 mcp-common = { path = "../common" }
 mcp-db = { path = "../db" }
 mcp-queue = { path = "../queue" }
+mcp-billing = { path = "../billing" }
 mcp-auth = { path = "../auth" }
 mcp-github = { path = "../github" }
 mcp-email = { path = "../email" }
@@ -40,8 +41,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 # Job queue
-apalis.workspace = true
+# `retry`, `timeout` and `limit` enable the RetryLayer (bounded backoff retries),
+# per-job timeout and worker concurrency middleware used in main.rs.
+apalis = { workspace = true, features = ["retry", "timeout", "limit"] }
 apalis-redis.workspace = true
+# `tower::retry::{RetryLayer, Policy}` for the custom bounded-backoff retry policy.
+tower = { version = "0.5", features = ["retry"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 
 # Utils

@@ -220,6 +220,7 @@ pub async fn rollback(
     let build_job = mcp_queue::BuildJob {
         deployment_id: deployment.id,
         server_id,
+        app_name: server.fly_app_name,
         github_repo: server.github_repo,
         github_branch: server.github_branch,
         commit_sha: target_deployment.commit_sha,
@@ -231,6 +232,7 @@ pub async fn rollback(
         transport: server.transport,
         entry_command: server.entry_command,
         build_command: server.build_command,
+        memory_mb: server.memory_mb,
     };
 
     state

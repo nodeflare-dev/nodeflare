@@ -53,8 +53,9 @@ struct MachineResponse {
 
 pub async fn deploy(config: &AppConfig, job: &DeployJob) -> Result<String> {
     let client = reqwest::Client::new();
-    let server_id_str = job.server_id.to_string();
-    let app_name = format!("mcp-{}", server_id_str.split('-').next().unwrap_or(&server_id_str[..8.min(server_id_str.len())]));
+    // Use the persisted, collision-free app name carried on the job (never recompute it
+    // from a truncated UUID prefix, which collided across tenants).
+    let app_name = job.app_name.clone();
 
     // Create app if it doesn't exist
     create_app_if_not_exists(&client, config, &app_name).await?;
@@ -123,17 +124,14 @@ async fn create_app_if_not_exists(
     config: &AppConfig,
     app_name: &str,
 ) -> Result<()> {
-    let response = client
-        .get(format!("{}/apps/{}", FLY_API_URL, app_name))
-        .header("Authorization", format!("Bearer {}", config.flyio.api_token))
-        .send()
-        .await?;
-
-    if response.status().is_success() {
-        return Ok(());
-    }
-
-    // Create new app
+    // Avoid a check-then-create TOCTOU race (two concurrent deploys both seeing "absent"
+    // then both POSTing): just attempt the create and treat an already-exists conflict
+    // (HTTP 409, or 422 with a "taken"/"exists" body) as success. The create call is the
+    // single atomic point of truth.
+    //
+    // NOTE (deferred): this does not serialize *concurrent deploys of the same server*.
+    // A per-app deploy lock would need a shared lease (e.g. Redis) which is out of scope
+    // for an in-crate change; create-conflict handling is the safe minimum.
     let create_response = client
         .post(format!("{}/apps", FLY_API_URL))
         .header("Authorization", format!("Bearer {}", config.flyio.api_token))
@@ -145,12 +143,18 @@ async fn create_app_if_not_exists(
         .await
         .context("Failed to create app")?;
 
-    if !create_response.status().is_success() {
-        let error_text = create_response.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!("Failed to create app: {}", error_text));
+    let status = create_response.status();
+    if status.is_success() || status == reqwest::StatusCode::CONFLICT {
+        return Ok(());
     }
 
-    Ok(())
+    let error_text = create_response.text().await.unwrap_or_default();
+    let lower = error_text.to_lowercase();
+    if lower.contains("already") && (lower.contains("exist") || lower.contains("taken")) {
+        return Ok(()); // app already created (concurrent deploy / retry) — fine
+    }
+
+    Err(anyhow::anyhow!("Failed to create app: {}", error_text))
 }
 
 async fn wait_for_machine(
@@ -171,8 +175,18 @@ async fn wait_for_machine(
 
         if response.status().is_success() {
             let machine: MachineResponse = response.json().await?;
-            if machine.state == "started" {
-                return Ok(());
+            match machine.state.as_str() {
+                "started" => return Ok(()),
+                // Terminal states: stop polling immediately instead of waiting out the
+                // full 60s only to report a generic timeout.
+                "failed" | "destroyed" | "destroying" => {
+                    return Err(anyhow::anyhow!(
+                        "Machine {} entered terminal state '{}' while starting",
+                        machine_id,
+                        machine.state
+                    ));
+                }
+                _ => {}
             }
         }
 

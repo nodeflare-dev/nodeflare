@@ -185,6 +185,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
             get(billing::get_subscription),
         )
         .route(
+            "/workspaces/:workspace_id/billing/usage",
+            get(billing::get_usage),
+        )
+        .route(
             "/workspaces/:workspace_id/billing/checkout",
             post(billing::create_checkout),
         )

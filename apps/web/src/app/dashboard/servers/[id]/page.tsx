@@ -1,6 +1,6 @@
 'use client';
 
-import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
 import Link from 'next/link';
@@ -27,6 +27,8 @@ import {
   Legend,
 } from 'recharts';
 import { BuildLogsPanel } from '@/components/deployment/build-logs-panel';
+import { MemorySelect } from '@/components/servers/memory-select';
+import { DEFAULT_MEMORY_MB } from '@/lib/plans';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -39,13 +41,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { useSetPageHeader } from '../../page-header';
-
-interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-  plan: string;
-}
+import { useWorkspace } from '@/hooks/use-workspace';
 
 // Static status colors - moved outside component to prevent recreation
 const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
@@ -106,22 +102,13 @@ export default function ServerDetailPage() {
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Fetch independent data in parallel
-  const [serversQuery, workspacesQuery] = useQueries({
-    queries: [
-      {
-        queryKey: ['servers'],
-        queryFn: () => api.get<McpServer[]>('/servers'),
-      },
-      {
-        queryKey: ['workspaces'],
-        queryFn: () => api.get<Workspace[]>('/workspaces'),
-      },
-    ],
+  const serversQuery = useQuery({
+    queryKey: ['servers'],
+    queryFn: () => api.get<McpServer[]>('/servers'),
   });
 
+  const { workspaces } = useWorkspace();
   const servers = serversQuery.data;
-  const workspaces = workspacesQuery.data;
   const isLoadingServers = serversQuery.isLoading;
   const isErrorServers = serversQuery.isError;
 
@@ -1252,7 +1239,17 @@ function SettingsTab({
   const [entryCommand, setEntryCommand] = useState(server.entry_command || '');
   const [buildCommand, setBuildCommand] = useState(server.build_command || '');
   const [authEnabled, setAuthEnabled] = useState(server.auth_enabled ?? true);
+  const [memoryMb, setMemoryMb] = useState(server.memory_mb ?? DEFAULT_MEMORY_MB);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Plan limits cap which memory sizes are selectable (Free is limited to 256MB).
+  const { data: plans } = useQuery<{ plan: string; limits: { max_memory_mb: number } }[]>({
+    queryKey: ['billing-plans'],
+    queryFn: () => api.get('/billing/plans'),
+  });
+  const { workspaces } = useWorkspace();
+  const currentPlan = workspaces?.find((w) => w.id === workspaceId)?.plan || 'free';
+  const maxMemoryMb = plans?.find((p) => p.plan === currentPlan)?.limits.max_memory_mb ?? 256;
 
   const handleSave = async () => {
     setIsSaving(true);
@@ -1268,6 +1265,7 @@ function SettingsTab({
         entry_command: entryCommand || undefined,
         build_command: buildCommand || undefined,
         auth_enabled: authEnabled,
+        memory_mb: memoryMb,
       });
       queryClient.invalidateQueries({ queryKey: ['servers'] });
     } catch {
@@ -1358,6 +1356,8 @@ function SettingsTab({
             className="bg-white font-mono"
           />
         </div>
+
+        <MemorySelect value={memoryMb} onChange={setMemoryMb} maxMemoryMb={maxMemoryMb} />
 
         <div>
           <Label className="block mb-2">{t('create.visibility')}</Label>
@@ -1885,6 +1885,33 @@ function MetricsTab({ serverId, workspaceId, serverStatus, t }: { serverId: stri
     return { diff: Math.abs(diff).toFixed(1), isUp: diff > 0 };
   }, [metrics?.memory_used, memoryUsed]);
 
+  // Freshness: servers scale to zero, so the newest sample may be old ("last seen") or
+  // missing entirely (idle / never scraped). We surface that instead of rendering 0 as
+  // if it were live.
+  const latestTimestamp = useMemo(() => {
+    const all = [
+      ...(metrics?.cpu_usage || []),
+      ...(metrics?.memory_used || []),
+      ...(metrics?.network_rx || []),
+      ...(metrics?.network_tx || []),
+    ];
+    if (all.length === 0) return null;
+    return all.reduce((max, p) => Math.max(max, p.timestamp), 0);
+  }, [metrics]);
+
+  const hasMetricData = latestTimestamp !== null;
+  const isMetricStale =
+    latestTimestamp !== null && Math.floor(Date.now() / 1000) - latestTimestamp > 600; // >10min
+  const lastSeenLabel =
+    latestTimestamp !== null
+      ? new Date(latestTimestamp * 1000).toLocaleString('ja-JP', {
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : '';
+
   // Now safe to have conditional returns after all hooks are called
   if (serverStatus !== 'running') {
     return (
@@ -1910,6 +1937,31 @@ function MetricsTab({ serverId, workspaceId, serverStatus, t }: { serverId: stri
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <p className="text-red-500">{t('metrics.loadError')}</p>
+        {/* Surface the real cause (e.g. a Prometheus 401/403 or wrong org) instead of a
+            silent all-zero dashboard. */}
+        <p className="text-xs text-gray-400 mt-1 max-w-md break-words">
+          {error instanceof Error ? error.message : String(error)}
+        </p>
+        <button
+          onClick={() => refetch()}
+          className="mt-4 px-4 py-2 text-sm text-violet-600 hover:text-violet-700"
+        >
+          {t('metrics.retry')}
+        </button>
+      </div>
+    );
+  }
+
+  // No samples at all in the window: the machine is idle/scaled to zero (or was never
+  // scraped). Show that honestly rather than a grid of zeros.
+  if (!hasMetricData) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mb-4">
+          <BarChart3 className="w-8 h-8 text-gray-400" />
+        </div>
+        <p className="text-gray-500">{t('metrics.idle')}</p>
+        <p className="text-sm text-gray-400 mt-1">{t('metrics.idleHint')}</p>
         <button
           onClick={() => refetch()}
           className="mt-4 px-4 py-2 text-sm text-violet-600 hover:text-violet-700"
@@ -1922,6 +1974,21 @@ function MetricsTab({ serverId, workspaceId, serverStatus, t }: { serverId: stri
 
   return (
     <div className="space-y-6">
+      {/* Freshness badge: distinguish a live sample from a stale "last seen" one, since
+          scale-to-zero means the latest point can be hours old. */}
+      <div className="flex items-center gap-2 text-xs">
+        {isMetricStale ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+            {t('metrics.lastSeen')} {lastSeenLabel}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+            {t('metrics.live')}
+          </span>
+        )}
+      </div>
+
       {/* Metrics Summary Cards with Sparklines */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {/* CPU Card */}

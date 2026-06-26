@@ -1,4 +1,12 @@
-# Build stage
+# syntax=docker/dockerfile:1
+#
+# Use BuildKit cache mounts for the cargo registry and the target/ dir. Depot persists
+# these across builds (and even across a build that gets killed mid-compile), so the
+# heavy dependency compilation isn't redone every deploy and incremental progress
+# survives — avoiding the all-from-scratch ~15-20min build that blew past Fly's build
+# deadline. The compiled binary is copied OUT of the (ephemeral) target cache mount in
+# the same RUN so it lands in the image layer.
+
 FROM rust:1.82-alpine AS builder
 
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconfig
@@ -10,8 +18,13 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 COPY migrations ./migrations
 
-# Build release binary
-RUN cargo build --release --package mcp-api
+# Build release binary. target/ and the cargo registry are cache mounts (not layers), so
+# the binary must be copied to a real path within the same RUN to survive into the image.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    cargo build --release --package mcp-api && \
+    cp target/release/mcp-api /usr/local/bin/mcp-api
 
 # Runtime stage
 FROM alpine:3.20
@@ -20,7 +33,7 @@ RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/mcp-api /app/mcp-api
+COPY --from=builder /usr/local/bin/mcp-api /app/mcp-api
 COPY --from=builder /app/migrations /app/migrations
 
 ENV RUST_LOG=info

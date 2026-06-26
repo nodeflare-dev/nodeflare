@@ -4,8 +4,8 @@ use axum::{
     Json,
 };
 use fred::interfaces::{KeysInterface, LuaInterface};
-use mcp_billing::{PaymentMethodDetails, PLANS};
-use mcp_db::WorkspaceRepository;
+use mcp_billing::{PaymentMethodDetails, Plan as BillingPlan, PLANS};
+use mcp_db::{RegionUsageRepository, ServerRepository, WorkspaceRepository};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,6 +40,7 @@ pub async fn list_plans() -> Json<Vec<PlanResponse>> {
                 max_deployments_per_month: p.limits.max_deployments_per_month,
                 max_requests_per_month: p.limits.max_requests_per_month,
                 max_team_members: p.limits.max_team_members,
+                max_memory_mb: p.limits.max_memory_mb,
                 log_retention_days: p.limits.log_retention_days,
                 custom_domains: p.limits.custom_domains,
                 priority_support: p.limits.priority_support,
@@ -86,6 +87,80 @@ pub async fn get_subscription(
         current_period_start,
         current_period_end: workspace.current_period_end.map(|d| d.timestamp()),
         cancel_at_period_end,
+    }))
+}
+
+/// Current-month memory-time usage for a workspace (GB-hours per server + total).
+/// Usage billing applies to paid plans; Free is shown for transparency but billed flat.
+pub async fn get_usage(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<UsageResponse>, (StatusCode, String)> {
+    WorkspaceRepository::get_member(&state.db, workspace_id, auth_user.user_id)
+        .await
+        .map_err(db_error)?
+        .ok_or((StatusCode::FORBIDDEN, "Not a member".to_string()))?;
+
+    let workspace = WorkspaceRepository::find_by_id(&state.db, workspace_id)
+        .await
+        .map_err(db_error)?
+        .ok_or((StatusCode::NOT_FOUND, "Workspace not found".to_string()))?;
+
+    let rows = RegionUsageRepository::list_current_period(&state.db, workspace_id)
+        .await
+        .map_err(db_error)?;
+
+    // Sum gb_minutes per server (a server may span regions), then convert to GB-hours.
+    let mut per_server: std::collections::HashMap<Uuid, f64> = std::collections::HashMap::new();
+    for r in &rows {
+        *per_server.entry(r.server_id).or_insert(0.0) += r.gb_minutes;
+    }
+
+    // Label each server. Missing names (deleted servers) still count toward the total.
+    let names: std::collections::HashMap<Uuid, String> =
+        ServerRepository::list_by_workspace(&state.db, workspace_id, 200, 0)
+            .await
+            .map_err(db_error)?
+            .into_iter()
+            .map(|s| (s.id, s.name))
+            .collect();
+
+    let servers: Vec<ServerUsage> = per_server
+        .iter()
+        .map(|(id, gb_minutes)| ServerUsage {
+            server_id: *id,
+            name: names.get(id).cloned().unwrap_or_else(|| "(deleted)".to_string()),
+            gb_hours: gb_minutes / 60.0,
+        })
+        .collect();
+
+    let total_gb_hours: f64 = per_server.values().sum::<f64>() / 60.0;
+
+    // Display-only estimate. Real charges come later via Stripe metered usage; until a
+    // rate is configured this is 0 and nothing is billed for usage.
+    let rate = std::env::var("USAGE_RATE_JPY_PER_GB_HOUR")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
+    let billing_plan = match workspace.plan.as_str() {
+        "pro" => BillingPlan::Pro,
+        "team" => BillingPlan::Team,
+        "enterprise" => BillingPlan::Enterprise,
+        _ => BillingPlan::Free,
+    };
+    // Free plan is flat (capped, not metered): never show a usage charge.
+    let metered = billing_plan != BillingPlan::Free;
+    let estimated_cost_jpy = if metered { total_gb_hours * rate } else { 0.0 };
+
+    Ok(Json(UsageResponse {
+        plan: workspace.plan,
+        metered,
+        total_gb_hours,
+        rate_jpy_per_gb_hour: rate,
+        estimated_cost_jpy,
+        servers,
     }))
 }
 
@@ -529,10 +604,29 @@ pub struct PlanLimitsResponse {
     pub max_deployments_per_month: u32,
     pub max_requests_per_month: u64,
     pub max_team_members: u32,
+    pub max_memory_mb: u32,
     pub log_retention_days: u32,
     pub custom_domains: bool,
     pub priority_support: bool,
     pub sso_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerUsage {
+    pub server_id: Uuid,
+    pub name: String,
+    pub gb_hours: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UsageResponse {
+    pub plan: String,
+    /// Whether this plan is usage-billed (paid) vs flat-capped (Free).
+    pub metered: bool,
+    pub total_gb_hours: f64,
+    pub rate_jpy_per_gb_hour: f64,
+    pub estimated_cost_jpy: f64,
+    pub servers: Vec<ServerUsage>,
 }
 
 #[derive(Debug, Serialize)]

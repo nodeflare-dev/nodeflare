@@ -3,16 +3,54 @@ use mcp_common::AppConfig;
 use mcp_queue::{BuildJob, SecretEnv};
 use serde::Deserialize;
 use std::path::Path;
+use std::process::Stdio;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// Sanitize log output to prevent leaking secret values
-/// Replaces any occurrence of secret values with "[REDACTED]"
+/// Minimum secret-value length we will substring-redact. Replacing a 1-3 char value
+/// (e.g. a port number used as a "secret") would corrupt unrelated log text, so we
+/// only redact values long enough to be unambiguous; shorter values still get caught
+/// by the token-shape patterns below when they look like credentials.
+const MIN_REDACTED_SECRET_LEN: usize = 4;
+
+/// Regexes matching well-known credential shapes, so we redact tokens that leak via a
+/// path we don't hold the value for (e.g. `flyctl` echoing its own auth token, a
+/// `Bearer` header in a traced request). Compiled once.
+fn token_redaction_patterns() -> &'static [regex::Regex] {
+    use std::sync::OnceLock;
+    static PATTERNS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        [
+            // Fly.io tokens.
+            r"FlyV1\s+[A-Za-z0-9_\-,/.=]+",
+            r"f[om][0-9]_[A-Za-z0-9_\-]{10,}",
+            // GitHub tokens (ghp_, gho_, ghs_, ghr_, ghu_, github_pat_).
+            r"gh[posru]_[A-Za-z0-9]{20,}",
+            r"github_pat_[A-Za-z0-9_]{20,}",
+            // OpenAI/Anthropic-style keys.
+            r"sk-[A-Za-z0-9_\-]{16,}",
+            // AWS access key id.
+            r"AKIA[0-9A-Z]{12,}",
+            // Authorization: Bearer <token>.
+            r"(?i)bearer\s+[A-Za-z0-9._\-]{8,}",
+        ]
+        .iter()
+        .filter_map(|p| regex::Regex::new(p).ok())
+        .collect()
+    })
+}
+
+/// Sanitize log output to prevent leaking secret values.
+/// Replaces known secret values, and any credential-shaped token, with "[REDACTED]".
 fn sanitize_log_output(output: &str, secrets: &[SecretEnv]) -> String {
     let mut sanitized = output.to_string();
     for secret in secrets {
-        if !secret.value.is_empty() {
+        if secret.value.len() >= MIN_REDACTED_SECRET_LEN {
             sanitized = sanitized.replace(&secret.value, "[REDACTED]");
         }
+    }
+    for re in token_redaction_patterns() {
+        sanitized = re.replace_all(&sanitized, "[REDACTED]").into_owned();
     }
     sanitized
 }
@@ -66,6 +104,43 @@ fn validate_secret_value(value: &str) -> Result<()> {
 
 const FLY_API_URL: &str = "https://api.machines.dev/v1";
 
+// ============================================================================
+// Centralized constants (single source of truth)
+//
+// Base image versions, internal ports, the probed MCP protocol version and the
+// external-command timeouts used to live as magic literals scattered across the
+// Dockerfile templates and the deploy path. Centralizing them here keeps a bump
+// (e.g. node 20 -> 22) to one edit and makes the timeouts auditable. Values are
+// unchanged from the originals.
+// ============================================================================
+
+/// Base images used by the generated Dockerfiles.
+const NODE_IMAGE: &str = "node:20-slim";
+const PYTHON_IMAGE: &str = "python:3.11-slim";
+const GO_BUILDER_IMAGE: &str = "golang:1.22";
+const RUST_BUILDER_IMAGE: &str = "rust:1.75-slim";
+const DEBIAN_RUNTIME_IMAGE: &str = "debian:bookworm-slim";
+
+/// Internal ports per transport/runtime.
+const STDIO_PORT: u16 = 8000;
+const NODE_PORT: u16 = 3000;
+const PYTHON_PORT: u16 = 8000;
+const GO_RUST_PORT: u16 = 8080;
+
+/// MCP protocol version sent by the post-deploy verification probe.
+const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Post-deploy probe budget.
+const PROBE_ATTEMPTS: usize = 8;
+const PROBE_RETRY_DELAY_SECS: u64 = 5;
+const PROBE_REQUEST_TIMEOUT_SECS: u64 = 12;
+
+/// Timeouts for external `flyctl` invocations. `apps create` / `secrets` are quick
+/// control-plane calls; `deploy` runs a full remote image build.
+const FLYCTL_CREATE_TIMEOUT_SECS: u64 = 60;
+const FLYCTL_SECRETS_TIMEOUT_SECS: u64 = 60;
+const FLYCTL_DEPLOY_TIMEOUT_SECS: u64 = 20 * 60;
+
 /// STDIO-to-SSE adapter script content (embedded at compile time)
 const STDIO_ADAPTER_JS: &str = include_str!("../assets/stdio-adapter.cjs");
 
@@ -98,22 +173,40 @@ fn extract_dockerfile_entry_command(dockerfile_content: &str) -> Option<String> 
     entrypoint.or(cmd)
 }
 
-/// Parse a Docker command (JSON array or shell form)
+/// Wrap a token in double quotes if it contains whitespace (or is empty), so that a
+/// multi-word argument decoded from a JSON exec-form survives the round-trip through
+/// the `String`-typed entry command and is re-tokenized as a single argument by
+/// `tokenize_shell`. Tokens without whitespace pass through unchanged.
+fn shell_quote_if_needed(token: &str) -> String {
+    if token.is_empty() || token.chars().any(char::is_whitespace) {
+        format!("\"{}\"", token.replace('"', "\\\""))
+    } else {
+        token.to_string()
+    }
+}
+
+/// Parse a Docker command (JSON exec form or shell form) into a command string.
+/// The JSON exec form is decoded with `serde_json` (correctly handling escaped quotes,
+/// embedded commas and multi-word arguments) rather than a naive comma split; multi-word
+/// elements are re-quoted so they round-trip as single arguments.
 fn parse_docker_command(s: &str) -> Option<String> {
     let s = s.trim();
 
-    // JSON array form: ["executable", "arg1", "arg2"]
-    if s.starts_with('[') && s.ends_with(']') {
-        // Simple JSON parsing - extract strings from array
-        let inner = &s[1..s.len()-1];
-        let parts: Vec<&str> = inner
-            .split(',')
-            .map(|p| p.trim().trim_matches('"').trim_matches('\''))
-            .filter(|p| !p.is_empty())
-            .collect();
-        if !parts.is_empty() {
-            return Some(parts.join(" "));
+    // JSON array (exec) form: ["executable", "arg with spaces", "arg2"]
+    if s.starts_with('[') {
+        if let Ok(parts) = serde_json::from_str::<Vec<String>>(s) {
+            let parts: Vec<String> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+            if !parts.is_empty() {
+                return Some(
+                    parts
+                        .iter()
+                        .map(|p| shell_quote_if_needed(p))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
         }
+        return None;
     }
 
     // Shell form: executable arg1 arg2
@@ -600,7 +693,7 @@ pub(crate) fn prefix_entry_with_subdir(entry: &str, subdir: &str) -> String {
 #[derive(Debug, Deserialize)]
 struct MachineInfo {
     id: String,
-    #[allow(dead_code)]
+    #[serde(default)]
     state: String,
 }
 
@@ -615,15 +708,15 @@ pub struct DeployResult {
 
 /// Generate fly.toml content for a server
 fn generate_fly_toml(app_name: &str, region: &str, runtime: &str, transport: &str, memory_mb: u64) -> String {
-    // For STDIO transport, always use port 8000 (STDIO adapter's port)
+    // For STDIO transport, always use the STDIO adapter's port.
     let internal_port = if transport == "stdio" {
-        8000
+        STDIO_PORT
     } else {
         match runtime {
-            "node" => 3000,
-            "python" => 8000,
-            "go" | "rust" => 8080,
-            _ => 3000,
+            "node" => NODE_PORT,
+            "python" => PYTHON_PORT,
+            "go" | "rust" => GO_RUST_PORT,
+            _ => NODE_PORT,
         }
     };
 
@@ -1361,11 +1454,11 @@ fn generate_sse_dockerfile(runtime: &str, build_command: Option<&str>, project: 
                 .as_deref()
                 .map(format_entry_command_as_args)
                 .unwrap_or_else(|| r#""node", "index.js""#.to_string());
-            format!(r#"FROM node:20-slim
+            format!(r#"FROM {NODE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 {setup}
-EXPOSE 3000
+EXPOSE {NODE_PORT}
 CMD [{node_cmd}]
 "#)
         },
@@ -1374,33 +1467,33 @@ CMD [{node_cmd}]
             // Optional custom build (e.g. a codegen/compile step) only when set.
             let build_step = optional_build_step(build_command);
             let python_cmd = python_default_cmd(project);
-            format!(r#"FROM python:3.11-slim
+            format!(r#"FROM {PYTHON_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 {install_deps}
-{build_step}EXPOSE 8000
+{build_step}EXPOSE {PYTHON_PORT}
 CMD [{python_cmd}]
 "#)
         },
-        "go" => r#"FROM golang:1.22 AS builder
+        "go" => format!(r#"FROM {GO_BUILDER_IMAGE} AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server .
-FROM debian:bookworm-slim
+FROM {DEBIAN_RUNTIME_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/server .
-EXPOSE 8080
+EXPOSE {GO_RUST_PORT}
 CMD ["./server"]
-"#.to_string(),
+"#),
         "rust" => {
             // Copy & run the actual compiled binary (its name is the crate/bin name),
             // instead of assuming a binary literally called `server`.
             let (copy_bin, run_cmd) = rust_binary_copy_and_cmd(project);
-            format!(r#"FROM rust:1.75-slim AS builder
+            format!(r#"FROM {RUST_BUILDER_IMAGE} AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
@@ -1410,20 +1503,20 @@ RUN rm -rf src
 COPY . .
 RUN touch src/main.rs
 RUN cargo build --release
-FROM debian:bookworm-slim
+FROM {DEBIAN_RUNTIME_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 {copy_bin}
-EXPOSE 8080
+EXPOSE {GO_RUST_PORT}
 CMD [{run_cmd}]
 "#)
         },
-        _ => r#"FROM debian:bookworm-slim
+        _ => format!(r#"FROM {DEBIAN_RUNTIME_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 CMD ["./start.sh"]
-"#.to_string(),
+"#),
     }
 }
 
@@ -1507,20 +1600,25 @@ fn generate_stdio_dockerfile(
         "node" => {
             // Check if entry command is an npx command that needs special handling
             if let Some(ref cmd) = effective_entry_command {
+                // `parse_npx_command` only returns Some for a package spec that passes the
+                // npm name grammar, so `{package}` below can never carry shell metacharacters
+                // into the `RUN npm install -g` line. Args/package are additionally
+                // JSON-encoded for the exec-form CMD so they can't break out of the array.
                 if let Some((package, extra_args)) = parse_npx_command(cmd) {
                     // For npx commands:
                     // 1. Install package globally (puts binary in /usr/local/bin)
                     // 2. Use npx to run it (npx resolves binary name from package.json)
                     // This avoids hardcoding binary names which vary per package
+                    let package_json = serde_json::to_string(&package).unwrap_or_else(|_| "\"\"".into());
                     let extra_args_str = if extra_args.is_empty() {
                         String::new()
                     } else {
-                        format!(", {}", extra_args.iter().map(|a| format!("\"{}\"", a)).collect::<Vec<_>>().join(", "))
+                        format!(", {}", extra_args.iter().map(|a| serde_json::to_string(a).unwrap_or_else(|_| "\"\"".into())).collect::<Vec<_>>().join(", "))
                     };
 
                     // npx packages are prebuilt; only run a build when the user explicitly set one.
                     let build_step = optional_build_step(build_command);
-                    return format!(r#"FROM node:20-slim
+                    return format!(r#"FROM {NODE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # Install the package globally - binary goes to /usr/local/bin which is in PATH
@@ -1529,13 +1627,13 @@ COPY package*.json ./
 RUN npm ci --only=production 2>/dev/null || npm install --only=production || true
 COPY . .
 {build_step}# STDIO adapter is already copied to source directory
-ENV PORT=3000
+ENV PORT={NODE_PORT}
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
-EXPOSE 3000
+EXPOSE {NODE_PORT}
 # Use npx to run the globally installed package
 # npx resolves the correct binary name from package.json
-CMD ["node", "stdio-adapter.cjs", "npx", "{package}"{extra_args_str}]
+CMD ["node", "stdio-adapter.cjs", "npx", {package_json}{extra_args_str}]
 "#);
                 }
             }
@@ -1551,15 +1649,15 @@ CMD ["node", "stdio-adapter.cjs", "npx", "{package}"{extra_args_str}]
 
             // Install/copy/build, using the detected package manager (npm or pnpm).
             let setup = node_setup_section(project.node_pm, build_command);
-            format!(r#"FROM node:20-slim
+            format!(r#"FROM {NODE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 {setup}
 # STDIO adapter is already copied to source directory
-ENV PORT=3000
+ENV PORT={NODE_PORT}
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
-EXPOSE 3000
+EXPOSE {NODE_PORT}
 CMD ["node", "stdio-adapter.cjs", {node_cmd}]
 "#)
         },
@@ -1578,41 +1676,41 @@ CMD ["node", "stdio-adapter.cjs", {node_cmd}]
             // Optional custom build (e.g. a codegen/compile step) only when set.
             let build_step = optional_build_step(build_command);
 
-            format!(r#"FROM python:3.11-slim
+            format!(r#"FROM {PYTHON_IMAGE}
 # Install Node.js for the STDIO-to-SSE adapter
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl nodejs npm && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 {install_deps}
-{build_step}ENV PORT=8000
+{build_step}ENV PORT={PYTHON_PORT}
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
-EXPOSE 8000
+EXPOSE {PYTHON_PORT}
 CMD ["node", "stdio-adapter.cjs", {python_cmd}]
 "#)
         },
-        "go" => format!(r#"FROM golang:1.22 AS builder
+        "go" => format!(r#"FROM {GO_BUILDER_IMAGE} AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server .
 
-FROM node:20-slim
+FROM {NODE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/server .
 COPY stdio-adapter.cjs .
-ENV PORT=8080
+ENV PORT={GO_RUST_PORT}
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
-EXPOSE 8080
+EXPOSE {GO_RUST_PORT}
 CMD ["node", "stdio-adapter.cjs", "./server"]
 "#),
         "rust" => {
             // Copy & run the actual compiled binary instead of assuming `./server`.
             let (copy_bin, run_cmd) = rust_binary_copy_and_cmd(project);
-            format!(r#"FROM rust:1.75-slim AS builder
+            format!(r#"FROM {RUST_BUILDER_IMAGE} AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
@@ -1623,41 +1721,37 @@ COPY . .
 RUN touch src/main.rs
 RUN cargo build --release
 
-FROM node:20-slim
+FROM {NODE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 {copy_bin}
 COPY stdio-adapter.cjs .
-ENV PORT=8080
+ENV PORT={GO_RUST_PORT}
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
-EXPOSE 8080
+EXPOSE {GO_RUST_PORT}
 CMD ["node", "stdio-adapter.cjs", {run_cmd}]
 "#)
         },
-        _ => format!(r#"FROM node:20-slim
+        _ => format!(r#"FROM {NODE_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends procps curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
-ENV PORT=3000
+ENV PORT={NODE_PORT}
 ENV MCP_PATH="{mcp_path}"
 ENV MCP_HTTP_HOST=0.0.0.0
-EXPOSE 3000
+EXPOSE {NODE_PORT}
 CMD ["node", "stdio-adapter.cjs", "./start.sh"]
 "#),
     }
 }
 
-/// Format a Python entry command for use in Dockerfile CMD
+/// Format a Python entry command for use in Dockerfile CMD.
 /// Handles various formats: "python server.py", "uv run mcp-server", etc.
+/// Identical encoding rules to `format_entry_command_as_args` (quote-aware split +
+/// JSON-escaped elements) — see that function for the injection-safety rationale.
 fn format_python_entry_command(cmd: &str) -> String {
-    // Split command into parts and format each as a quoted string
-    let parts: Vec<&str> = cmd.split_whitespace().collect();
-    parts
-        .iter()
-        .map(|p| format!("\"{}\"", p))
-        .collect::<Vec<_>>()
-        .join(", ")
+    format_entry_command_as_args(cmd)
 }
 
 /// Generate STDIO Dockerfile that wraps an existing Dockerfile
@@ -1665,44 +1759,49 @@ fn format_python_entry_command(cmd: &str) -> String {
 /// second stage adds Node.js and STDIO adapter
 fn generate_stdio_dockerfile_with_existing(_runtime: &str, mcp_path: &str, entry_command: &str, original_dockerfile: &str) -> String {
     // Standard port for STDIO adapter
-    let port = 8000;
+    let port = STDIO_PORT;
 
     // Create a multi-stage build:
-    // 1. First stage: Use original Dockerfile content (renamed to "app")
-    // 2. Second stage: Add Node.js and STDIO adapter on top
+    // 1. First stage: build the original Dockerfile, renamed to the "app" stage.
+    // 2. Second stage: run *that* image, adding only Node.js + the STDIO adapter.
 
     // Modify the original Dockerfile to be a named stage
     let app_stage = convert_to_named_stage(original_dockerfile, "app");
 
-    // Extract ENV lines from original Dockerfile to preserve PATH and other settings
+    // Extract ENV lines from original Dockerfile to preserve PATH and other settings.
+    // `FROM app` already inherits the stage's ENV, but re-stating them is harmless and
+    // keeps the adapter's PATH expectations explicit.
     let env_lines = extract_env_lines(original_dockerfile);
 
+    // Previously this stage was a fresh `node:` base with `COPY --from=app / /`, which
+    // unioned the app's entire root filesystem over a different distro's libc/toolchain
+    // — non-deterministic and prone to glibc/library clashes. Instead we base the
+    // runtime stage directly on the app stage (so its libc, dependencies, binaries and
+    // ENV are exactly what the app was built with) and only add Node.js for the adapter.
+    // Node install is a no-op when the base already ships it (e.g. node-based servers).
     format!(r#"# ============================================
 # Stage 1: Build using original Dockerfile
 # ============================================
 {app_stage}
 
 # ============================================
-# Stage 2: Add STDIO adapter with Node.js
+# Stage 2: Run the original image + STDIO adapter (Node.js)
 # ============================================
-FROM node:20-bookworm-slim AS runtime
-
-# Install required tools
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    procps curl ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy the entire filesystem from the app stage
-# This preserves all installed dependencies, binaries, and environment
-COPY --from=app / /
+FROM app AS runtime
 
 WORKDIR /app
+
+# Ensure Node.js is available for the adapter. No-op if the base already has it;
+# otherwise install via the base image's own package manager (apt or apk).
+RUN sh -c 'command -v node >/dev/null 2>&1 || \
+    (command -v apt-get >/dev/null 2>&1 && apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates && rm -rf /var/lib/apt/lists/*) || \
+    (command -v apk >/dev/null 2>&1 && apk add --no-cache nodejs npm ca-certificates) || true'
 
 # Preserve ENV variables from original Dockerfile (especially PATH)
 {env_lines}
 
-# Copy STDIO adapter
-COPY stdio-adapter.cjs .
+# Copy STDIO adapter from the build context
+COPY stdio-adapter.cjs /app/stdio-adapter.cjs
 
 ENV PORT={port}
 ENV MCP_PATH="{mcp_path}"
@@ -1710,7 +1809,7 @@ ENV MCP_HTTP_HOST=0.0.0.0
 EXPOSE {port}
 
 # Run the original entry command through the STDIO adapter
-CMD ["node", "stdio-adapter.cjs", {entry_cmd_json}]
+CMD ["node", "/app/stdio-adapter.cjs", {entry_cmd_json}]
 "#,
         app_stage = app_stage,
         env_lines = env_lines,
@@ -1835,19 +1934,56 @@ fn convert_to_named_stage(dockerfile: &str, stage_name: &str) -> String {
     result.join("\n")
 }
 
-/// Format entry command as JSON arguments for CMD
+/// Format an entry command as JSON arguments for a Dockerfile exec-form CMD.
+/// Uses a quote-aware tokenizer (so `node "my file.js"` stays two args, not three) and
+/// JSON-encodes every token via `serde_json`. The JSON encoding is the injection guard:
+/// a token containing `"`, `\` or `]` is escaped and can no longer break out of the
+/// `CMD [...]` array, so an attacker-controlled entry command can't append instructions.
 fn format_entry_command_as_args(cmd: &str) -> String {
-    // Split command into parts and format as JSON strings
-    let parts: Vec<&str> = cmd.split_whitespace().collect();
-    parts
+    tokenize_shell(cmd)
         .iter()
-        .map(|p| format!("\"{}\"", p))
+        .map(|p| serde_json::to_string(p).unwrap_or_else(|_| "\"\"".to_string()))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-/// Check if command is an npx command and extract package info
-/// Returns (package_name, extra_args) if it's an npx command
+/// Validate an npx package spec ("name", "@scope/name", "name@version") against a
+/// conservative subset of the npm name grammar. Anything outside this charset is
+/// rejected so it can never be interpolated into the `RUN npm install -g …` shell line.
+fn is_valid_npx_package(spec: &str) -> bool {
+    if spec.is_empty() || spec.len() > 214 {
+        return false;
+    }
+    // Split off an optional @version / @tag suffix (the '@' that isn't a leading scope).
+    let (name, version) = match spec.rfind('@') {
+        None | Some(0) => (spec, None), // leading '@' = scope marker, not a version
+        Some(i) => (&spec[..i], Some(&spec[i + 1..])),
+    };
+    let seg_ok = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
+    };
+    let name_ok = if let Some(scoped) = name.strip_prefix('@') {
+        match scoped.split_once('/') {
+            Some((scope, pkg)) => seg_ok(scope) && seg_ok(pkg),
+            None => false, // a scope with no package name
+        }
+    } else {
+        seg_ok(name)
+    };
+    let version_ok = version.map_or(true, |v| {
+        !v.is_empty()
+            && v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    });
+    name_ok && version_ok
+}
+
+/// Check if command is an npx command and extract package info.
+/// Returns (package_name, extra_args) only when the package spec is a valid npm name;
+/// an invalid/suspicious spec returns None so the caller falls back to the plain
+/// (JSON-escaped, no global-install) command path instead of shelling out with it.
 fn parse_npx_command(cmd: &str) -> Option<(String, Vec<String>)> {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() || parts[0] != "npx" {
@@ -1873,6 +2009,12 @@ fn parse_npx_command(cmd: &str) -> Option<(String, Vec<String>)> {
 
     let package = parts[package_idx].to_string();
 
+    // Reject anything that isn't a well-formed npm package spec before it can reach a
+    // shell `RUN` line. (CRITICAL: prevents Dockerfile command injection via npx.)
+    if !is_valid_npx_package(&package) {
+        return None;
+    }
+
     // Collect any extra arguments after the package name
     let extra_args: Vec<String> = parts[package_idx + 1..]
         .iter()
@@ -1889,16 +2031,12 @@ pub async fn build_and_deploy(
     job: &BuildJob,
     source_dir: &Path,
     secrets: &[SecretEnv],
+    plan_memory_ceiling_mb: u64,
     on_log: impl Fn(&str),
 ) -> Result<DeployResult> {
-    let server_id_str = job.server_id.to_string();
-    let app_name = format!(
-        "mcp-{}",
-        server_id_str
-            .split('-')
-            .next()
-            .unwrap_or(&server_id_str[..8.min(server_id_str.len())])
-    );
+    // Use the persisted, collision-free app name carried on the job. Never recompute it
+    // from a truncated UUID prefix — that mapped distinct servers onto the same Fly app.
+    let app_name = job.app_name.clone();
 
     on_log(&format!("Preparing deployment for app: {}", app_name));
 
@@ -1923,9 +2061,22 @@ pub async fn build_and_deploy(
         }
     }
 
-    // Write fly.toml (bump memory when a heavy dependency needs it; default 256MB).
+    // Resolve machine memory: start from the user's choice (or 256MB default), raise
+    // it to any detection floor (headless browsers need ~2GB), then clamp to what the
+    // plan allows. Clamping the floor LAST is deliberate — a free-tier browser server
+    // stays at its small ceiling and fails honestly via the OOM hint, instead of being
+    // silently handed a 2GB machine the plan doesn't pay for.
     let fly_toml_path = source_dir.join("fly.toml");
-    let memory_mb = provision.min_memory_mb.unwrap_or(256);
+    let requested_mb = job.memory_mb.map(|m| m as u64).unwrap_or(256);
+    let floor_mb = provision.min_memory_mb.unwrap_or(0);
+    let memory_mb = requested_mb
+        .max(floor_mb)
+        .min(plan_memory_ceiling_mb)
+        .max(256);
+    on_log(&format!(
+        "Machine memory: {}MB (requested {}MB, detection floor {}MB, plan ceiling {}MB)",
+        memory_mb, requested_mb, floor_mb, plan_memory_ceiling_mb
+    ));
     let fly_toml_content =
         generate_fly_toml(&app_name, &job.region, &job.runtime, &job.transport, memory_mb);
     tokio::fs::write(&fly_toml_path, &fly_toml_content)
@@ -2082,19 +2233,35 @@ pub async fn build_and_deploy(
 
     // Create app if it doesn't exist
     on_log(&format!("Creating/verifying Fly.io app: {}", app_name));
-    let create_output = Command::new("flyctl")
-        .args(["apps", "create", &app_name, "--org", &config.flyio.org_slug])
-        .env("FLY_API_TOKEN", &config.flyio.api_token)
-        .current_dir(source_dir)
-        .output()
-        .await
-        .context("Failed to run flyctl apps create")?;
+    let create_output = tokio::time::timeout(
+        std::time::Duration::from_secs(FLYCTL_CREATE_TIMEOUT_SECS),
+        Command::new("flyctl")
+            .args(["apps", "create", &app_name, "--org", &config.flyio.org_slug])
+            .env("FLY_API_TOKEN", &config.flyio.api_token)
+            .current_dir(source_dir)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("flyctl apps create timed out after {}s", FLYCTL_CREATE_TIMEOUT_SECS))?
+    .context("Failed to run flyctl apps create")?;
 
-    // Ignore error if app already exists
+    // Idempotency: a create can fail simply because the app already exists. Decide via
+    // the typed Machines REST API (authoritative) rather than CLI wording — only falling
+    // back to the English "already exists" substring if the REST check is itself
+    // inconclusive (last resort, since localized/changed CLI text would break it).
     if !create_output.status.success() {
         let stderr = String::from_utf8_lossy(&create_output.stderr);
-        if !stderr.contains("already exists") {
-            tracing::warn!("App create warning: {}", stderr);
+        if app_exists(config, &app_name).await {
+            tracing::info!("Fly app {} already exists; continuing", app_name);
+        } else if stderr.contains("already exists") {
+            tracing::info!("Fly app {} reported as already existing; continuing", app_name);
+        } else {
+            return Err(anyhow::anyhow!(
+                "Failed to create Fly app {}: {}",
+                app_name,
+                sanitize_log_output(stderr.trim(), secrets)
+            ));
         }
     }
 
@@ -2109,20 +2276,40 @@ pub async fn build_and_deploy(
         }
 
         on_log(&format!("Setting {} secrets...", secrets.len()));
-        let mut secret_args: Vec<String> = vec!["secrets".to_string(), "set".to_string()];
-        for secret in secrets {
-            secret_args.push(format!("{}={}", secret.key, secret.value));
-        }
-        secret_args.push("--app".to_string());
-        secret_args.push(app_name.clone());
+        // SECURITY: feed `KEY=VALUE` pairs to `flyctl secrets import` over the child's
+        // stdin instead of passing them as argv. Secret values in argv are world-readable
+        // via `/proc/<pid>/cmdline` and `ps` for the lifetime of the process.
+        let stdin_payload: String = secrets
+            .iter()
+            .map(|s| format!("{}={}\n", s.key, s.value))
+            .collect();
 
-        let secrets_output = Command::new("flyctl")
-            .args(&secret_args)
+        let mut child = Command::new("flyctl")
+            .args(["secrets", "import", "--app", &app_name])
             .env("FLY_API_TOKEN", &config.flyio.api_token)
             .current_dir(source_dir)
-            .output()
-            .await
-            .context("Failed to set secrets")?;
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .context("Failed to spawn flyctl secrets import")?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(stdin_payload.as_bytes())
+                .await
+                .context("Failed to write secrets to flyctl stdin")?;
+            stdin.shutdown().await.ok(); // close stdin so flyctl proceeds
+        }
+
+        let secrets_output = tokio::time::timeout(
+            std::time::Duration::from_secs(FLYCTL_SECRETS_TIMEOUT_SECS),
+            child.wait_with_output(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("flyctl secrets import timed out after {}s", FLYCTL_SECRETS_TIMEOUT_SECS))?
+        .context("Failed to import secrets")?;
 
         if !secrets_output.status.success() {
             let stderr = String::from_utf8_lossy(&secrets_output.stderr);
@@ -2135,25 +2322,31 @@ pub async fn build_and_deploy(
     // Deploy with remote builder
     // Note: Region is already set in fly.toml as primary_region
     on_log("Starting remote build and deploy...");
-    let deploy_output = Command::new("flyctl")
-        .args([
-            "deploy",
-            "--remote-only",
-            "--app",
-            &app_name,
-            "--yes",
-        ])
-        .env("FLY_API_TOKEN", &config.flyio.api_token)
-        .current_dir(source_dir)
-        .output()
-        .await
-        .context("Failed to run flyctl deploy")?;
+    let deploy_output = tokio::time::timeout(
+        std::time::Duration::from_secs(FLYCTL_DEPLOY_TIMEOUT_SECS),
+        Command::new("flyctl")
+            .args([
+                "deploy",
+                "--remote-only",
+                "--app",
+                &app_name,
+                "--yes",
+            ])
+            .env("FLY_API_TOKEN", &config.flyio.api_token)
+            .current_dir(source_dir)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("flyctl deploy timed out after {}s", FLYCTL_DEPLOY_TIMEOUT_SECS))?
+    .context("Failed to run flyctl deploy")?;
 
     let stdout = String::from_utf8_lossy(&deploy_output.stdout);
     let stderr = String::from_utf8_lossy(&deploy_output.stderr);
 
-    // Log output
-    for line in stdout.lines() {
+    // Log output (sanitized — stdout can echo env/secret values during a deploy).
+    let sanitized_stdout = sanitize_log_output(&stdout, secrets);
+    for line in sanitized_stdout.lines() {
         if !line.trim().is_empty() {
             on_log(line);
         }
@@ -2180,10 +2373,18 @@ pub async fn build_and_deploy(
     let endpoint_url = format!("https://{}.fly.dev", app_name);
 
     // Get machine ID from Fly.io API
-    let machine_id = get_machine_id(config, &app_name).await.ok();
-    if let Some(ref id) = machine_id {
-        on_log(&format!("Machine ID: {}", id));
-    }
+    let machine_id = match get_machine_id(config, &app_name).await {
+        Ok(id) => {
+            on_log(&format!("Machine ID: {}", id));
+            Some(id)
+        }
+        Err(e) => {
+            // Non-fatal: affinity routing degrades gracefully without it, but we must
+            // not silently swallow the cause.
+            tracing::warn!("Could not resolve machine id for {}: {}", app_name, e);
+            None
+        }
+    };
 
     Ok(DeployResult {
         endpoint_url,
@@ -2192,27 +2393,55 @@ pub async fn build_and_deploy(
     })
 }
 
-/// Destroy a Fly.io app via flyctl. Idempotent: a missing app is treated as success,
-/// so retries and double-deletes are safe.
-pub(crate) async fn destroy_app(config: &AppConfig, app_name: &str) -> Result<()> {
-    let output = Command::new("flyctl")
-        .args(["apps", "destroy", app_name, "--yes"])
-        .env("FLY_API_TOKEN", &config.flyio.api_token)
-        .output()
+/// Whether a Fly app exists, via the typed Machines REST API (authoritative, exit-code
+/// free). Used to make `apps create` idempotent without parsing CLI text.
+async fn app_exists(config: &AppConfig, app_name: &str) -> bool {
+    let client = reqwest::Client::new();
+    client
+        .get(format!("{}/apps/{}", FLY_API_URL, app_name))
+        .header("Authorization", format!("Bearer {}", config.flyio.api_token))
+        .send()
         .await
-        .context("Failed to run flyctl apps destroy")?;
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
+/// Destroy a Fly.io app via flyctl. Idempotent: a missing app is treated as success,
+/// so retries and double-deletes are safe. Idempotency is decided primarily via the
+/// typed REST API (the app is simply gone); the English substrings are only a
+/// last-resort fallback when the REST probe is itself unavailable.
+pub(crate) async fn destroy_app(config: &AppConfig, app_name: &str) -> Result<()> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(FLYCTL_CREATE_TIMEOUT_SECS),
+        Command::new("flyctl")
+            .args(["apps", "destroy", app_name, "--yes"])
+            .env("FLY_API_TOKEN", &config.flyio.api_token)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("flyctl apps destroy {} timed out", app_name))?
+    .context("Failed to run flyctl apps destroy")?;
     if output.status.success() {
         return Ok(());
     }
+    // Authoritative check: if the app no longer exists, the destroy is effectively done.
+    if !app_exists(config, app_name).await {
+        return Ok(()); // already gone — idempotent
+    }
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Last-resort fallback: REST said it still exists (or was unreachable) but the CLI
+    // explicitly reported "not found" — trust that wording rather than loop forever.
     let lower = stderr.to_lowercase();
     if lower.contains("not found") || lower.contains("could not find") || lower.contains("does not exist") {
-        return Ok(()); // already gone — idempotent
+        return Ok(());
     }
     Err(anyhow::anyhow!("flyctl apps destroy {} failed: {}", app_name, stderr.trim()))
 }
 
-/// Get the machine ID for an app from Fly.io API
+/// Get the machine ID for an app from Fly.io API. Prefers a machine in the `started`
+/// state (the one actually serving the current release) over an arbitrary entry, so
+/// affinity routing doesn't pin sessions to a stopped/replaced machine.
 async fn get_machine_id(config: &AppConfig, app_name: &str) -> Result<String> {
     let client = reqwest::Client::new();
 
@@ -2224,13 +2453,18 @@ async fn get_machine_id(config: &AppConfig, app_name: &str) -> Result<String> {
         .context("Failed to list machines")?;
 
     if !response.status().is_success() {
-        return Err(anyhow::anyhow!("Failed to list machines"));
+        return Err(anyhow::anyhow!(
+            "Failed to list machines: HTTP {}",
+            response.status()
+        ));
     }
 
     let machines: Vec<MachineInfo> = response.json().await?;
+    // Prefer a started machine (current release, actually serving); fall back to any.
     machines
-        .into_iter()
-        .next()
+        .iter()
+        .find(|m| m.state == "started")
+        .or_else(|| machines.first())
         .map(|m| format!("{}:{}", app_name, m.id))
         .ok_or_else(|| anyhow::anyhow!("No machines found"))
 }
@@ -2291,6 +2525,7 @@ pub(crate) fn extract_error_lines(log: &str, max_lines: usize) -> String {
         "cannot find", "cannot read", "not found", "no such file",
         "did not complete", "exit code", "exited with", "failed to",
         "module_not_found", "modulenotfounderror", "permission denied",
+        "out of memory", "oom", "killed process", "sigkill",
     ];
     let stripped = strip_ansi(log);
     let mut seen = std::collections::HashSet::new();
@@ -2340,18 +2575,39 @@ pub(crate) async fn fetch_app_logs(config: &AppConfig, app_name: &str) -> Option
 // probe a real MCP `initialize` against the deployed endpoint and only trust the
 // deploy when the child actually answers.
 //
-// Direction: fail the deploy only on a *proven* failure (the adapter returns 5xx
-// across retries — i.e. the child is dead). Cold-start/network noise is reported as
-// Inconclusive and does NOT fail the deploy, to avoid false negatives.
+// Direction: fail the deploy on a *proven* failure, which is one of two shapes —
+//   (a) the adapter returns 5xx across retries (it's up, but the child is dead), or
+//   (b) not a single HTTP request ever completes across all retries (nothing is
+//       listening on the MCP port — a crash-loop / OOM / wrong bind).
+// Only the in-between stays Inconclusive: the endpoint *did* answer at the HTTP
+// layer at least once but never with a valid initialize (4xx, partial handshake) —
+// that can still be cold-start noise, so we don't fail on it.
 // ============================================================================
 
+#[derive(Debug, PartialEq)]
 pub(crate) enum ProbeOutcome {
     /// The MCP server answered an initialize request.
     Verified,
-    /// The server is reachable but failed (adapter 5xx) — the child isn't running.
+    /// Proven failure: either the adapter returned 5xx across retries (child dead),
+    /// or no HTTP request ever completed (nothing listening on the MCP port).
     Broken(String),
-    /// Couldn't get a definitive answer (timeouts/cold start) — don't fail on this.
+    /// The endpoint answered at the HTTP layer but never with a valid initialize
+    /// (4xx / partial handshake) — could still be cold start, so don't fail on it.
     Inconclusive(String),
+}
+
+/// Decide the probe outcome from what the retry loop observed. Pure so it can be
+/// unit-tested without a live endpoint.
+fn classify_probe(saw_server_error: bool, saw_http_response: bool, detail: String) -> ProbeOutcome {
+    // `saw_server_error` ⇒ adapter up but child dead. `!saw_http_response` ⇒ the
+    // probe never even completed a request, so nothing is listening — a server that
+    // can't return a single byte is broken, not "inconclusive". Folding the latter
+    // into Inconclusive is exactly what let an OOM crash-loop be reported as success.
+    if saw_server_error || !saw_http_response {
+        ProbeOutcome::Broken(detail)
+    } else {
+        ProbeOutcome::Inconclusive(detail)
+    }
 }
 
 /// Char-safe short preview of a response body for logs/errors.
@@ -2388,23 +2644,27 @@ pub(crate) async fn verify_mcp_initialize(
         endpoint_url.trim_end_matches('/'),
         path.trim_start_matches('/')
     );
+    // The config is static and valid, so `build()` is effectively infallible; using
+    // `expect` (rather than falling back to `Client::new()`) guarantees we never silently
+    // drop the per-request timeout and hang the probe.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(12))
+        .timeout(std::time::Duration::from_secs(PROBE_REQUEST_TIMEOUT_SECS))
         .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+        .expect("reqwest client builds from a static, valid configuration");
     let body = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
         "params": {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {},
             "clientInfo": { "name": "nodeflare-probe", "version": "1.0" }
         }
     });
 
-    const ATTEMPTS: usize = 8;
+    const ATTEMPTS: usize = PROBE_ATTEMPTS;
     let mut saw_server_error = false;
+    let mut saw_http_response = false;
     let mut last_detail = String::from("no response");
 
     for attempt in 1..=ATTEMPTS {
@@ -2417,6 +2677,7 @@ pub(crate) async fn verify_mcp_initialize(
             .await
         {
             Ok(resp) => {
+                saw_http_response = true;
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
                 if status.is_success() && looks_like_jsonrpc(&text) {
@@ -2437,15 +2698,11 @@ pub(crate) async fn verify_mcp_initialize(
                 "Verifying MCP server… not ready yet (attempt {}/{}: {})",
                 attempt, ATTEMPTS, last_detail
             ));
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(PROBE_RETRY_DELAY_SECS)).await;
         }
     }
 
-    if saw_server_error {
-        ProbeOutcome::Broken(last_detail)
-    } else {
-        ProbeOutcome::Inconclusive(last_detail)
-    }
+    classify_probe(saw_server_error, saw_http_response, last_detail)
 }
 
 #[cfg(test)]
@@ -2968,6 +3225,48 @@ Error: Cannot find module '/app/dist/index.js'
     }
 
     #[test]
+    fn extract_error_lines_surfaces_oom() {
+        // The OOM kill is the root-cause line; it must survive the marker filter so
+        // the user sees *why* the server never started.
+        let log = "\
+[Adapter] Auto-initializing MCP process...
+[  360.482640] Out of memory: Killed process 662 (python) total-vm:890996kB
+[Adapter] MCP process exited with code null, signal SIGKILL";
+        let out = extract_error_lines(log, 12);
+        assert!(out.contains("Out of memory"));
+        assert!(out.contains("SIGKILL"));
+    }
+
+    // ---- Post-deploy probe classification ----
+
+    #[test]
+    fn probe_5xx_is_broken() {
+        // Adapter answered but with 5xx across retries — the child is dead.
+        let out = classify_probe(true, true, "HTTP 502".into());
+        assert_eq!(out, ProbeOutcome::Broken("HTTP 502".into()));
+    }
+
+    #[test]
+    fn probe_never_reachable_is_broken() {
+        // No HTTP request ever completed (connection errors/timeouts every attempt):
+        // nothing is listening — an OOM crash-loop, not cold-start noise. This is the
+        // case that used to be mislabeled Inconclusive and reported as success.
+        let out = classify_probe(false, false, "request error: error sending request".into());
+        assert_eq!(
+            out,
+            ProbeOutcome::Broken("request error: error sending request".into())
+        );
+    }
+
+    #[test]
+    fn probe_reachable_but_no_initialize_is_inconclusive() {
+        // The endpoint answered at the HTTP layer (e.g. 4xx) but never a valid
+        // initialize — could still be cold start, so we don't fail the deploy.
+        let out = classify_probe(false, true, "HTTP 404".into());
+        assert_eq!(out, ProbeOutcome::Inconclusive("HTTP 404".into()));
+    }
+
+    #[test]
     fn prefix_entry_node_and_npm() {
         assert_eq!(
             prefix_entry_with_subdir("node dist/index.js", "src/filesystem"),
@@ -2989,5 +3288,55 @@ Error: Cannot find module '/app/dist/index.js'
         // Unrewritable shapes pass through unchanged.
         assert_eq!(prefix_entry_with_subdir("./server", "src/x"), "./server");
         assert_eq!(prefix_entry_with_subdir("node dist/index.js", ""), "node dist/index.js");
+    }
+
+    // ---- Injection guards: npx package validation + CMD encoding ----
+
+    #[test]
+    fn npx_package_validation_accepts_valid_and_rejects_injection() {
+        assert!(is_valid_npx_package("server-everything"));
+        assert!(is_valid_npx_package("@modelcontextprotocol/server-filesystem"));
+        assert!(is_valid_npx_package("pkg@1.2.3"));
+        assert!(is_valid_npx_package("@scope/pkg@latest"));
+        // Shell metacharacters / traversal / spaces must be rejected.
+        assert!(!is_valid_npx_package("pkg; rm -rf /"));
+        assert!(!is_valid_npx_package("pkg`whoami`"));
+        assert!(!is_valid_npx_package("pkg$(touch x)"));
+        assert!(!is_valid_npx_package("../evil"));
+        assert!(!is_valid_npx_package("pkg && curl evil"));
+        assert!(!is_valid_npx_package("@scope"));
+        assert!(!is_valid_npx_package(""));
+    }
+
+    #[test]
+    fn parse_npx_rejects_malicious_package() {
+        assert_eq!(parse_npx_command("npx -y server-everything"), Some(("server-everything".into(), vec![])));
+        // Injection attempt -> None (caller falls back to the safe JSON-escaped path).
+        assert_eq!(parse_npx_command("npx -y evil; rm -rf /"), None);
+        assert_eq!(parse_npx_command("npx \"$(curl evil)\""), None);
+    }
+
+    #[test]
+    fn entry_command_args_are_json_escaped() {
+        // Decisive property: the produced CMD args always form a VALID JSON array, so no
+        // attacker-controlled token can break out of `CMD [...]` to inject instructions.
+        let out = format_entry_command_as_args(r#"node "a\"]; RUN evil"#);
+        let parsed: Vec<String> =
+            serde_json::from_str(&format!("[{}]", out)).expect("args must form a valid JSON array");
+        assert_eq!(parsed[0], "node");
+        // Quote-aware split keeps a quoted multi-word arg as a single element.
+        assert_eq!(format_entry_command_as_args("node \"my file.js\""), r#""node", "my file.js""#);
+        assert_eq!(format_entry_command_as_args("python main.py"), r#""python", "main.py""#);
+    }
+
+    #[test]
+    fn parse_docker_command_json_exec_form_uses_serde() {
+        // Multi-word arg with spaces is preserved (re-quoted) rather than comma-split.
+        assert_eq!(
+            parse_docker_command(r#"["node", "my file.js"]"#).as_deref(),
+            Some(r#"node "my file.js""#)
+        );
+        assert_eq!(parse_docker_command(r#"["node","index.js"]"#).as_deref(), Some("node index.js"));
+        assert_eq!(parse_docker_command("python main.py").as_deref(), Some("python main.py"));
     }
 }

@@ -27,6 +27,21 @@ const MCP_PATH = process.env.MCP_PATH || '/mcp';
 const REQUEST_TIMEOUT_MS = 30000;
 const KEEPALIVE_MS = 25000;
 
+// Maximum accepted request body. Without a cap a single client could stream an
+// unbounded body and OOM the adapter (the whole body is buffered before parsing).
+const MAX_BODY_BYTES = parseInt(process.env.MCP_MAX_BODY_BYTES || String(4 * 1024 * 1024), 10);
+
+// Child-process restart policy. The child is restarted on exit with exponential
+// backoff, but only up to a ceiling: a server that crash-loops on startup (bad entry
+// command, missing build output, OOM) must NOT be restarted forever — past the budget
+// we stop and report unhealthy so the platform can surface a real failure instead of
+// hiding it behind an endless restart loop.
+const RESTART_BASE_DELAY_MS = 1000;
+const RESTART_MAX_DELAY_MS = 30000;
+const MAX_RESTARTS = parseInt(process.env.MCP_MAX_RESTARTS || '10', 10);
+// Window after which a stably-running child resets its restart budget (it recovered).
+const RESTART_BUDGET_RESET_MS = 60000;
+
 // Get the command to run from arguments
 const args = process.argv.slice(2);
 if (args.length === 0) {
@@ -64,6 +79,16 @@ let messageBuffer = '';
 let isInitialized = false;
 let initializePromise = null;
 
+// The result the child returned to the auto-initialize handshake. Cached so a client's
+// own `initialize` can be answered without re-initializing the (already initialized)
+// child — see handlePost / the double-initialize note.
+let cachedInitializeResult = null;
+
+// Restart bookkeeping (see RESTART_* constants).
+let restartCount = 0;
+let restartGiveUp = false; // true once the restart budget is exhausted
+let childStartedAt = 0;
+
 // Single child process is shared by all callers. To avoid cross-request id
 // collisions we remap every *client request* id to a unique internal id and
 // restore the original id on the matching response.
@@ -75,7 +100,14 @@ let nextInternalId = 1;
 // server-initiated messages and legacy SSE responses.
 const streams = new Set();
 
-// Streamable HTTP session id (single shared child => single logical session).
+// Streamable HTTP session id.
+//
+// ACCEPTED LIMITATION (single logical session): this adapter wraps ONE stdio child
+// shared by all callers, so there is exactly one MCP session. We do not isolate state
+// per `Mcp-Session-Id`; concurrent clients share the same child. This matches how these
+// stdio MCP servers are deployed (one server process per machine) and request/response
+// correlation is kept correct by remapping JSON-RPC ids in sendRequest(). True
+// per-client isolation would require one child per session, which is out of scope.
 let sessionId = null;
 
 // ---------------------------------------------------------------------------
@@ -139,7 +171,7 @@ async function autoInitialize() {
   }
   console.log('[Adapter] Auto-initializing MCP process...');
   try {
-    await sendRequest({
+    const initResponse = await sendRequest({
       jsonrpc: '2.0',
       method: 'initialize',
       params: {
@@ -151,6 +183,9 @@ async function autoInitialize() {
     if (mcpProcess && !mcpProcess.killed) {
       sendRaw({ jsonrpc: '2.0', method: 'notifications/initialized' });
     }
+    // Cache the child's initialize result so a client's own initialize can be answered
+    // without re-initializing the child (which many servers reject / mishandle).
+    cachedInitializeResult = initResponse && initResponse.result ? initResponse.result : null;
     isInitialized = true;
     console.log('[Adapter] MCP process initialized successfully');
   } catch (err) {
@@ -191,6 +226,7 @@ function startMcpProcess() {
   console.log(`[Adapter] Spawning MCP process: ${command} ${commandArgs.join(' ')}`);
   isInitialized = false;
   initializePromise = null;
+  childStartedAt = Date.now();
 
   mcpProcess = spawn(command, commandArgs, {
     stdio: ['pipe', 'pipe', 'inherit'],
@@ -212,6 +248,7 @@ function startMcpProcess() {
     isInitialized = false;
     initializePromise = null;
     sessionId = null;
+    cachedInitializeResult = null;
 
     // Reject pending requests
     for (const [, { reject, timeout }] of pending) {
@@ -220,11 +257,32 @@ function startMcpProcess() {
     }
     pending.clear();
 
-    // Restart after a delay
+    // If the child stayed up long enough, it recovered — reset the restart budget so a
+    // later, unrelated crash gets a fresh set of attempts.
+    if (Date.now() - childStartedAt >= RESTART_BUDGET_RESET_MS) {
+      restartCount = 0;
+    }
+
+    if (restartCount >= MAX_RESTARTS) {
+      // Crash-loop: stop restarting and fail health checks so the platform marks the
+      // machine unhealthy instead of us hiding a broken server behind endless restarts.
+      restartGiveUp = true;
+      console.error(
+        `[Adapter] MCP process exceeded ${MAX_RESTARTS} restarts; giving up and reporting unhealthy.`
+      );
+      return;
+    }
+
+    // Exponential backoff with a ceiling.
+    const delay = Math.min(
+      RESTART_BASE_DELAY_MS * 2 ** restartCount,
+      RESTART_MAX_DELAY_MS
+    );
+    restartCount += 1;
+    console.log(`[Adapter] Restarting MCP process in ${delay}ms (attempt ${restartCount}/${MAX_RESTARTS})...`);
     setTimeout(() => {
-      console.log('[Adapter] Restarting MCP process...');
       startMcpProcess();
-    }, 1000);
+    }, delay);
   });
 
   // Auto-initialize after a short delay to let the process start
@@ -274,10 +332,33 @@ function openStream(req, res) {
 
 async function handlePost(req, res, path) {
   let body = '';
+  let size = 0;
+  let aborted = false;
   req.on('data', (chunk) => {
+    if (aborted) return;
+    size += chunk.length;
+    // Backpressure / OOM guard: reject once the body exceeds the cap instead of
+    // buffering it all. Pause the stream, send 413 and destroy the connection.
+    if (size > MAX_BODY_BYTES) {
+      aborted = true;
+      req.pause();
+      if (!res.headersSent) {
+        res.writeHead(413, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32600, message: 'Request body too large' },
+            id: null,
+          })
+        );
+      }
+      req.destroy();
+      return;
+    }
     body += chunk;
   });
   req.on('end', async () => {
+    if (aborted) return;
     try {
       const parsed = JSON.parse(body);
 
@@ -328,7 +409,18 @@ async function handlePost(req, res, path) {
       }
 
       // Streamable HTTP: await responses and return them in the POST body.
-      const responses = await Promise.all(requests.map((m) => sendRequest(m)));
+      const responses = await Promise.all(
+        requests.map((m) => {
+          // Double-initialize guard: the child was already initialized once by
+          // autoInitialize(). Forwarding a second `initialize` makes many servers error
+          // ("already initialized"). Replay the cached handshake result with the
+          // caller's id instead of re-initializing the child.
+          if (m.method === 'initialize' && isInitialized && cachedInitializeResult) {
+            return Promise.resolve({ jsonrpc: '2.0', id: m.id, result: cachedInitializeResult });
+          }
+          return sendRequest(m);
+        })
+      );
 
       const headers = { 'Content-Type': 'application/json' };
       if (requests.some((m) => m.method === 'initialize') && !sessionId) {
@@ -366,7 +458,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
 
-  // CORS
+  // CORS: a permissive `*` is intentional here. This adapter runs *behind* the platform
+  // proxy, which is the component that authenticates and authorizes every request before
+  // it reaches the adapter; the adapter itself is not directly internet-exposed for auth
+  // purposes. Browser preflight must therefore be allowed so MCP web clients work. If the
+  // adapter were ever exposed directly, this must be scoped to trusted origins.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   res.setHeader(
@@ -381,10 +477,22 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Health check
+  // Health check. Fail (503) when the child is dead or the restart budget is exhausted
+  // so Fly.io marks the machine unhealthy instead of routing traffic to a broken server
+  // that would only return errors.
   if (path === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', transport: 'stdio-adapter' }));
+    const childAlive = !!mcpProcess && !mcpProcess.killed && mcpProcess.exitCode === null;
+    const healthy = childAlive && !restartGiveUp;
+    res.writeHead(healthy ? 200 : 503, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        status: healthy ? 'ok' : 'unhealthy',
+        transport: 'stdio-adapter',
+        childAlive,
+        restartGiveUp,
+        restartCount,
+      })
+    );
     return;
   }
 

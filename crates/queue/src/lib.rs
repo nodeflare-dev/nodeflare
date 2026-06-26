@@ -10,6 +10,9 @@ use uuid::Uuid;
 pub struct BuildJob {
     pub deployment_id: Uuid,
     pub server_id: Uuid,
+    /// Persisted Fly.io app name to deploy to. Carried on the job so the builder never
+    /// recomputes it from a truncated UUID prefix (which collided across tenants).
+    pub app_name: String,
     pub github_repo: String,
     pub github_branch: String,
     pub commit_sha: String,
@@ -30,6 +33,9 @@ pub struct BuildJob {
     /// Custom build command run at image-build time (e.g., "npm run build", "npm run compile")
     /// If None, fall back to the runtime default (Node: `npm run build --if-present`)
     pub build_command: Option<String>,
+    /// User-selected machine memory in MB (256/512/1024/2048). None = auto (builder default).
+    /// The builder still raises this to the detection floor and clamps it to the plan ceiling.
+    pub memory_mb: Option<i32>,
 }
 
 impl BuildJob {
@@ -44,6 +50,7 @@ impl BuildJob {
         Self {
             deployment_id,
             server_id: server.id,
+            app_name: server.fly_app_name.clone(),
             github_repo: server.github_repo.clone(),
             github_branch: server.github_branch.clone(),
             commit_sha,
@@ -55,6 +62,7 @@ impl BuildJob {
             transport: server.transport.clone(),
             entry_command: server.entry_command.clone(),
             build_command: server.build_command.clone(),
+            memory_mb: server.memory_mb,
         }
     }
 }
@@ -64,6 +72,8 @@ impl BuildJob {
 pub struct DeployJob {
     pub deployment_id: Uuid,
     pub server_id: Uuid,
+    /// Persisted Fly.io app name to deploy to (never recomputed from the UUID prefix).
+    pub app_name: String,
     pub image_url: String,
     pub secrets: Vec<SecretEnv>,
     /// Target region for deployment

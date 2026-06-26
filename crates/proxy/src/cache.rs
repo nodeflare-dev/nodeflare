@@ -11,9 +11,9 @@ use bytes::Bytes;
 use lru::LruCache;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, RwLock};
 
 /// Number of shards for cache partitioning (must be power of 2)
 /// Increased from 16 to 32 for better performance under high concurrency
@@ -46,8 +46,10 @@ struct InFlightRequest {
 struct CacheShard {
     /// LRU cache for responses
     cache: RwLock<LruCache<u64, CacheEntry>>,
-    /// In-flight requests for this shard
-    in_flight: Mutex<std::collections::HashMap<u64, InFlightRequest>>,
+    /// In-flight requests for this shard.
+    /// Uses a std Mutex (never held across an `.await`) so the RAII `RequestHandle`
+    /// drop guard can clean up synchronously if the executing future is cancelled.
+    in_flight: StdMutex<std::collections::HashMap<u64, InFlightRequest>>,
 }
 
 impl CacheShard {
@@ -56,15 +58,15 @@ impl CacheShard {
             cache: RwLock::new(LruCache::new(
                 NonZeroUsize::new(capacity_per_shard).unwrap_or(NonZeroUsize::new(1).unwrap()),
             )),
-            in_flight: Mutex::new(std::collections::HashMap::new()),
+            in_flight: StdMutex::new(std::collections::HashMap::new()),
         }
     }
 }
 
 /// Sharded Request Cache for high-performance caching with reduced lock contention
 pub struct RequestCache {
-    /// Sharded caches
-    shards: Vec<CacheShard>,
+    /// Sharded caches (Arc so a `RequestHandle` can hold its shard for RAII cleanup)
+    shards: Vec<Arc<CacheShard>>,
     /// Cache TTL
     ttl: Duration,
     /// Total max entries (informational)
@@ -77,7 +79,7 @@ impl RequestCache {
     pub fn new(ttl_secs: u64, max_entries: usize) -> Self {
         let capacity_per_shard = max_entries / NUM_SHARDS;
         let shards = (0..NUM_SHARDS)
-            .map(|_| CacheShard::new(capacity_per_shard.max(1)))
+            .map(|_| Arc::new(CacheShard::new(capacity_per_shard.max(1))))
             .collect();
 
         Self {
@@ -104,7 +106,7 @@ impl RequestCache {
 
     /// Get the shard for a given key
     #[inline]
-    fn get_shard(&self, key: u64) -> &CacheShard {
+    fn get_shard(&self, key: u64) -> &Arc<CacheShard> {
         &self.shards[Self::shard_index(key)]
     }
 
@@ -142,17 +144,43 @@ impl RequestCache {
         let shard = self.get_shard(key);
         let ttl = self.ttl;
 
-        // Lock ordering: always acquire in_flight lock first, then cache lock
-        // This prevents deadlocks
-        let mut in_flight = shard.in_flight.lock().await;
+        loop {
+            // Fast path: serve from cache without touching the in-flight map.
+            {
+                let mut cache = shard.cache.write().await;
+                if let Some(entry) = cache.get(&key) {
+                    if entry.created_at.elapsed() < ttl {
+                        tracing::debug!("Cache hit for request");
+                        return CoalesceResult::Cached(CachedResponse {
+                            body: entry.response_body.clone(), // Zero-copy clone with Bytes
+                            status: entry.status,
+                            headers: (*entry.headers).clone(),
+                        });
+                    }
+                    // Expired - remove it
+                    cache.pop(&key);
+                }
+            }
 
-        // Check if request is already in-flight
-        if let Some(existing) = in_flight.get(&key) {
-            let mut rx = existing.tx.subscribe();
-            drop(in_flight); // Release lock while waiting
+            // Either join an in-flight request or register as the executor.
+            // The std Mutex is held only for this short, await-free section.
+            let mut rx = {
+                let mut in_flight = shard.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(existing) = in_flight.get(&key) {
+                    existing.tx.subscribe()
+                } else {
+                    let (tx, _) = broadcast::channel(1);
+                    in_flight.insert(key, InFlightRequest { tx });
+                    tracing::debug!("No cache/in-flight - executing request");
+                    return CoalesceResult::Execute(RequestHandle {
+                        shard: Arc::clone(shard),
+                        key,
+                        completed: false,
+                    });
+                }
+            };
 
             tracing::debug!("Coalescing request - waiting for in-flight result");
-
             match rx.recv().await {
                 Ok(entry) => {
                     return CoalesceResult::Coalesced(CachedResponse {
@@ -162,47 +190,29 @@ impl RequestCache {
                     });
                 }
                 Err(_) => {
-                    // Sender dropped without sending, caller should retry
-                    return CoalesceResult::Execute(RequestHandle { key });
+                    // The executor was cancelled/errored and dropped its sender (its
+                    // RequestHandle Drop guard removed the in-flight entry). Re-loop to
+                    // re-check the cache and, if still absent, take over as executor
+                    // instead of blindly executing a duplicate.
+                    tracing::debug!("Coalesced request lost its executor, re-registering");
+                    continue;
                 }
             }
         }
-
-        // Now check cache (while holding in_flight lock to prevent race)
-        {
-            let mut cache = shard.cache.write().await;
-            if let Some(entry) = cache.get(&key) {
-                if entry.created_at.elapsed() < ttl {
-                    tracing::debug!("Cache hit for request");
-                    return CoalesceResult::Cached(CachedResponse {
-                        body: entry.response_body.clone(), // Zero-copy clone with Bytes
-                        status: entry.status,
-                        headers: (*entry.headers).clone(),
-                    });
-                }
-                // Expired - remove it
-                cache.pop(&key);
-            }
-        }
-
-        // No cache, no in-flight - this request will execute
-        let (tx, _) = broadcast::channel(1);
-        in_flight.insert(key, InFlightRequest { tx });
-
-        tracing::debug!("No cache/in-flight - executing request");
-        CoalesceResult::Execute(RequestHandle { key })
     }
 
     /// Complete a request and cache the result
     /// Responses larger than max_response_size are not cached to prevent memory bloat
     pub async fn complete(
         &self,
-        handle: RequestHandle,
+        mut handle: RequestHandle,
         response_body: Vec<u8>,
         status: u16,
         headers: Vec<(String, String)>,
     ) {
-        let shard = self.get_shard(handle.key);
+        let shard = Arc::clone(&handle.shard);
+        // Mark handled so the Drop guard is a no-op.
+        handle.completed = true;
         let now = Instant::now();
 
         // Check if response is too large to cache
@@ -219,13 +229,14 @@ impl RequestCache {
             created_at: now,
         });
 
-        // Lock ordering: in_flight first, then cache
-        let mut in_flight = shard.in_flight.lock().await;
-
-        // Notify waiting requests (always do this, even if not caching)
-        if let Some(req) = in_flight.remove(&handle.key) {
-            // Ignore send errors (no receivers)
-            let _ = req.tx.send(entry.clone());
+        // Notify waiting requests (always do this, even if not caching).
+        // Short, await-free critical section on the std Mutex.
+        {
+            let mut in_flight = shard.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(req) = in_flight.remove(&handle.key) {
+                // Ignore send errors (no receivers)
+                let _ = req.tx.send(entry.clone());
+            }
         }
 
         // Only store in cache if response is not too large
@@ -249,12 +260,13 @@ impl RequestCache {
         }
     }
 
-    /// Cancel an in-flight request (on error)
-    pub async fn cancel(&self, handle: RequestHandle) {
-        let shard = self.get_shard(handle.key);
-        let mut in_flight = shard.in_flight.lock().await;
+    /// Cancel an in-flight request (on error).
+    /// Removing the entry drops the sender, so any coalesced waiters get a
+    /// `RecvError` and re-register / re-check the cache.
+    pub async fn cancel(&self, mut handle: RequestHandle) {
+        handle.completed = true;
+        let mut in_flight = handle.shard.in_flight.lock().unwrap_or_else(|p| p.into_inner());
         in_flight.remove(&handle.key);
-        // Dropping the sender will cause receivers to get an error
     }
 
     /// Periodic cleanup of expired entries across all shards
@@ -292,7 +304,7 @@ impl RequestCache {
 
         for shard in &self.shards {
             let cache = shard.cache.read().await;
-            let in_flight = shard.in_flight.lock().await;
+            let in_flight = shard.in_flight.lock().unwrap_or_else(|p| p.into_inner());
             cached_entries += cache.len();
             in_flight_requests += in_flight.len();
         }
@@ -305,9 +317,26 @@ impl RequestCache {
     }
 }
 
-/// Handle returned when a request should be executed
+/// Handle returned when a request should be executed.
+///
+/// Acts as a RAII guard: if it is dropped without `complete`/`cancel` having been
+/// called (e.g. the request future is cancelled), the Drop impl removes the
+/// in-flight entry so coalesced waiters don't hang and future identical requests
+/// don't stampede. Removing the entry drops the broadcast sender, waking waiters
+/// with a `RecvError` so they re-register.
 pub struct RequestHandle {
+    shard: Arc<CacheShard>,
     key: u64,
+    completed: bool,
+}
+
+impl Drop for RequestHandle {
+    fn drop(&mut self) {
+        if !self.completed {
+            let mut in_flight = self.shard.in_flight.lock().unwrap_or_else(|p| p.into_inner());
+            in_flight.remove(&self.key);
+        }
+    }
 }
 
 /// Result of trying to coalesce a request
@@ -362,7 +391,7 @@ mod tests {
         let result = cache.try_coalesce(endpoint, body).await;
         match result {
             CoalesceResult::Cached(resp) => {
-                assert_eq!(resp.body, b"response");
+                assert_eq!(resp.body.as_ref(), b"response");
                 assert_eq!(resp.status, 200);
             }
             _ => panic!("Expected Cached"),
@@ -403,7 +432,7 @@ mod tests {
         let result2 = join_handle.await.unwrap();
         match result2 {
             CoalesceResult::Coalesced(resp) => {
-                assert_eq!(resp.body, b"shared response");
+                assert_eq!(resp.body.as_ref(), b"shared response");
             }
             _ => panic!("Expected Coalesced for second request"),
         }
@@ -411,7 +440,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sharding() {
-        let cache = RequestCache::new(60, 100);
+        let _cache = RequestCache::new(60, 100);
 
         // Test that different keys go to different shards
         let key1 = RequestCache::cache_key("endpoint1", b"body1");

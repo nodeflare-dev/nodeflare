@@ -4,9 +4,10 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import Link from 'next/link';
-import { Users, Home, User, Plus, AlertCircle, X } from 'lucide-react';
+import { Users, User, Plus, AlertCircle, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import { TeamMember, AddMemberRequest, WorkspaceRole, getApiErrorCode, getApiErrorMessage } from '@/types';
+import { useWorkspace } from '@/hooks/use-workspace';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -19,13 +20,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-
-interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-  plan: string;
-}
 
 interface PlanLimits {
   max_team_members: number;
@@ -40,15 +34,10 @@ export default function TeamPage() {
   const t = useTranslations('team');
   const tCommon = useTranslations('common');
   const [showCreate, setShowCreate] = useState(false);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
 
-  const { data: workspaces, isLoading: isLoadingWorkspaces, isError: isErrorWorkspaces } = useQuery<Workspace[]>({
-    queryKey: ['workspaces'],
-    queryFn: () => api.get('/workspaces'),
-  });
-
-  const workspaceId = selectedWorkspaceId || workspaces?.[0]?.id;
-  const currentWorkspace = workspaces?.find(w => w.id === workspaceId);
+  const { activeWorkspace: currentWorkspace, isLoading: isLoadingWorkspaces } = useWorkspace();
+  const isErrorWorkspaces = false;
+  const workspaceId = currentWorkspace?.id;
 
   const { data: members, isLoading: isLoadingMembers, isError: isErrorMembers } = useQuery<TeamMember[]>({
     queryKey: ['workspaces', workspaceId, 'members'],
@@ -72,23 +61,7 @@ export default function TeamPage() {
     <div>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 sm:mb-8">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
-          {workspaces && workspaces.length > 1 && (
-            <div className="flex items-center gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg bg-gray-100 border border-gray-200 self-start">
-              <Home className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-gray-500" />
-              <select
-                className="bg-transparent text-xs sm:text-sm font-medium text-gray-700 focus:outline-none cursor-pointer pr-5 sm:pr-6 appearance-none"
-                value={workspaceId || ''}
-                onChange={(e) => setSelectedWorkspaceId(e.target.value)}
-                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 0 center' }}
-              >
-                {workspaces.map((ws) => (
-                  <option key={ws.id} value={ws.id}>{ws.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4" />
         <div className="flex items-center gap-2 sm:gap-3 self-start sm:self-auto">
           {/* Usage Badge */}
           <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-lg bg-gray-100 border border-gray-200 text-xs sm:text-sm">

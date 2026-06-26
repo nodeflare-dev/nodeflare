@@ -4,6 +4,7 @@ import { useQueries, useQuery } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { api } from '@/lib/api';
 import { McpServerBasic } from '@/types';
+import { useWorkspace } from '@/hooks/use-workspace';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
@@ -47,12 +48,6 @@ function formatDate(dateStr: string): string {
   return dateStr.split('T')[0];
 }
 
-interface Workspace {
-  id: string;
-  name: string;
-  plan: string;
-}
-
 interface Plan {
   plan: string;
   limits: {
@@ -68,16 +63,14 @@ export default function DashboardPage() {
   const tBilling = useTranslations('billing');
   const router = useRouter();
 
+  const { activeWorkspace, isLoading: workspacesLoading } = useWorkspace();
+
   // Fetch all independent data in parallel using useQueries
-  const [serversQuery, workspacesQuery, plansQuery] = useQueries({
+  const [serversQuery, plansQuery] = useQueries({
     queries: [
       {
         queryKey: ['servers-basic'],
         queryFn: () => api.get<McpServerBasic[]>('/servers/basic'),
-      },
-      {
-        queryKey: ['workspaces'],
-        queryFn: () => api.get<Workspace[]>('/workspaces'),
       },
       {
         queryKey: ['billing-plans'],
@@ -87,17 +80,16 @@ export default function DashboardPage() {
   });
 
   const servers = serversQuery.data;
-  const workspaces = workspacesQuery.data;
   const plans = plansQuery.data;
   const isLoadingServers = serversQuery.isLoading;
   const isSuccessServers = serversQuery.isSuccess;
   const isErrorServers = serversQuery.isError;
 
   // 必要なデータの初期ローディング中（いずれかがロード中ならローディング表示）
-  const isInitialLoading = serversQuery.isLoading || workspacesQuery.isLoading || plansQuery.isLoading;
+  const isInitialLoading = serversQuery.isLoading || workspacesLoading || plansQuery.isLoading;
 
   const runningServers = servers?.filter((s) => s.status === 'running') ?? [];
-  const currentWorkspace = workspaces?.[0];
+  const currentWorkspace = activeWorkspace;
   const currentPlan = plans?.find(p => p.plan === (currentWorkspace?.plan || 'free'));
 
   // Fetch stats for all servers in batch (single request instead of N requests)

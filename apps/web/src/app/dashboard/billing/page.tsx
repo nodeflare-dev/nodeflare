@@ -7,6 +7,8 @@ import { AlertCircle, CreditCard, X, ArrowLeft, ChevronLeft, ChevronRight, Clock
 import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
+import { UsageCard } from '@/components/billing/usage-card';
+import { useWorkspace } from '@/hooks/use-workspace';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,13 +59,6 @@ interface BillingSettings {
   auto_email_invoices: boolean;
 }
 
-interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-  plan: string;
-}
-
 interface Invoice {
   id: string;
   number: string | null;
@@ -101,12 +96,8 @@ export default function BillingPage() {
   const [billingError, setBillingError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: workspaces, isLoading: workspacesLoading, isError: workspacesError } = useQuery<Workspace[]>({
-    queryKey: ['workspaces'],
-    queryFn: () => api.get('/workspaces'),
-  });
-
-  const currentWorkspace = workspaces?.[0];
+  const { activeWorkspace: currentWorkspace, isLoading: workspacesLoading } = useWorkspace();
+  const workspacesError = false;
 
   const { data: plans, isLoading: plansLoading, isError: plansError } = useQuery<Plan[]>({
     queryKey: ['billing-plans'],
@@ -371,6 +362,11 @@ export default function BillingPage() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Memory-time usage this month */}
+      <div className="mb-4 sm:mb-6">
+        <UsageCard workspaceId={currentWorkspace?.id} />
       </div>
 
       {/* Two Column Layout: Current Plan | Invoice Calendar */}

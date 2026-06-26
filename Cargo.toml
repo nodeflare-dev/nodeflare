@@ -97,8 +97,11 @@ metrics-exporter-prometheus = "0.16"
 bytes = "1.9"
 
 [profile.release]
-lto = true
-codegen-units = 1
+# Build speed over peak optimization: full LTO + codegen-units=1 made the mcp-api
+# compile/link take ~15min, blowing past Fly's remote-build deadline. For an I/O-bound
+# service the runtime difference is negligible; reliable deploys matter more.
+lto = false
+codegen-units = 16
 panic = "abort"
 strip = true
 

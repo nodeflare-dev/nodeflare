@@ -309,7 +309,7 @@ impl RegionUsageRepository {
         let existing = sqlx::query_as::<_, RegionUsage>(
             r#"
             SELECT id, workspace_id, server_id, region, period_start, period_end,
-                   active_hours, reported_to_stripe, stripe_usage_record_id,
+                   active_hours, gb_minutes, reported_to_stripe, stripe_usage_record_id,
                    created_at, updated_at
             FROM region_usage
             WHERE server_id = $1 AND region = $2 AND period_start = $3
@@ -331,7 +331,7 @@ impl RegionUsageRepository {
             INSERT INTO region_usage (workspace_id, server_id, region, period_start, period_end)
             VALUES ($1, $2, $3, $4, $5)
             RETURNING id, workspace_id, server_id, region, period_start, period_end,
-                      active_hours, reported_to_stripe, stripe_usage_record_id,
+                      active_hours, gb_minutes, reported_to_stripe, stripe_usage_record_id,
                       created_at, updated_at
             "#,
         )
@@ -373,15 +373,67 @@ impl RegionUsageRepository {
         Ok(())
     }
 
+    /// Add memory-weighted active minutes (memory_gb * minutes) to the current
+    /// period's row, creating the row first so the accumulation can't silently no-op.
+    pub async fn add_gb_minutes(
+        pool: &PgPool,
+        workspace_id: Uuid,
+        server_id: Uuid,
+        region: &str,
+        gb_minutes: f64,
+    ) -> Result<()> {
+        Self::get_or_create_current(pool, workspace_id, server_id, region).await?;
+
+        let now = Utc::now().date_naive();
+        let period_start = first_of_month(now.year(), now.month());
+
+        sqlx::query(
+            r#"
+            UPDATE region_usage
+            SET gb_minutes = gb_minutes + $4, updated_at = NOW()
+            WHERE server_id = $1 AND region = $2 AND period_start = $3
+            "#,
+        )
+        .bind(server_id)
+        .bind(region)
+        .bind(period_start)
+        .bind(gb_minutes)
+        .execute(pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Current-period usage rows for a workspace (for the usage dashboard).
+    pub async fn list_current_period(pool: &PgPool, workspace_id: Uuid) -> Result<Vec<RegionUsage>> {
+        let now = Utc::now().date_naive();
+        let period_start = first_of_month(now.year(), now.month());
+        let records = sqlx::query_as::<_, RegionUsage>(
+            r#"
+            SELECT id, workspace_id, server_id, region, period_start, period_end,
+                   active_hours, gb_minutes, reported_to_stripe, stripe_usage_record_id,
+                   created_at, updated_at
+            FROM region_usage
+            WHERE workspace_id = $1 AND period_start = $2
+            "#,
+        )
+        .bind(workspace_id)
+        .bind(period_start)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(records)
+    }
+
     /// Get unreported usage records for billing
     pub async fn list_unreported(pool: &PgPool, workspace_id: Uuid) -> Result<Vec<RegionUsage>> {
         let records = sqlx::query_as::<_, RegionUsage>(
             r#"
             SELECT id, workspace_id, server_id, region, period_start, period_end,
-                   active_hours, reported_to_stripe, stripe_usage_record_id,
+                   active_hours, gb_minutes, reported_to_stripe, stripe_usage_record_id,
                    created_at, updated_at
             FROM region_usage
-            WHERE workspace_id = $1 AND reported_to_stripe = false AND active_hours > 0
+            WHERE workspace_id = $1 AND reported_to_stripe = false AND gb_minutes > 0
             "#,
         )
         .bind(workspace_id)
@@ -389,6 +441,21 @@ impl RegionUsageRepository {
         .await?;
 
         Ok(records)
+    }
+
+    /// Workspace ids that have unreported usage to bill (for the reporting job to iterate).
+    pub async fn list_unreported_workspaces(pool: &PgPool) -> Result<Vec<Uuid>> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(
+            r#"
+            SELECT DISTINCT workspace_id
+            FROM region_usage
+            WHERE reported_to_stripe = false AND gb_minutes > 0
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
     /// Mark usage as reported to Stripe

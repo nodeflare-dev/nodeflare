@@ -7,7 +7,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronLeft, Aperture, Plus, Check, X, Search, ChevronDown } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Workspace, McpServerMinimal } from '@/types';
+import { McpServerMinimal } from '@/types';
+import { useWorkspace } from '@/hooks/use-workspace';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -35,12 +36,8 @@ export default function NewOAuthAppPage() {
 
   useSetPageHeader(t('create.title'), <Aperture className="w-4 h-4" />);
 
-  const { data: workspaces } = useQuery<Workspace[]>({
-    queryKey: ['workspaces'],
-    queryFn: () => api.get('/workspaces'),
-  });
-
-  const workspaceId = workspaces?.[0]?.id;
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id;
 
   const [name, setName] = useState('');
   const [redirectUri, setRedirectUri] = useState('https://claude.ai/api/mcp/auth_callback');

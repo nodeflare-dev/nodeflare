@@ -4,9 +4,10 @@ import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslations } from 'next-intl';
 import { useRouter } from 'next/navigation';
-import { ChevronLeft, Aperture, Home, Plus, Trash2 } from 'lucide-react';
+import { ChevronLeft, Aperture, Plus, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
-import { Workspace, McpServerMinimal } from '@/types';
+import { McpServerMinimal } from '@/types';
+import { useWorkspace } from '@/hooks/use-workspace';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -36,14 +37,8 @@ export default function OAuthAppsPage() {
   const t = useTranslations('oauth');
   const router = useRouter();
   useSetPageHeader(t('title'), <Aperture className="w-4 h-4" />);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
-
-  const { data: workspaces, isLoading: isLoadingWorkspaces } = useQuery<Workspace[]>({
-    queryKey: ['workspaces'],
-    queryFn: () => api.get('/workspaces'),
-  });
-
-  const workspaceId = selectedWorkspaceId || workspaces?.[0]?.id;
+  const { activeWorkspace, isLoading: isLoadingWorkspaces } = useWorkspace();
+  const workspaceId = activeWorkspace?.id;
 
   const { data: oauthApps, isLoading: isLoadingApps } = useQuery<OAuthApp[]>({
     queryKey: ['workspaces', workspaceId, 'oauth-apps'],
@@ -85,24 +80,6 @@ export default function OAuthAppsPage() {
           {t('new')}
         </Button>
       </div>
-
-      {workspaces && workspaces.length > 1 && (
-        <div className="mb-8">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-100 border border-gray-200 w-fit">
-            <Home className="w-4 h-4 text-gray-500" />
-              <select
-                className="bg-transparent text-sm font-medium text-gray-700 focus:outline-none cursor-pointer pr-6 appearance-none"
-                value={workspaceId || ''}
-                onChange={(e) => setSelectedWorkspaceId(e.target.value)}
-                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 0 center' }}
-              >
-                {workspaces.map((ws) => (
-                  <option key={ws.id} value={ws.id}>{ws.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        )}
 
       {/* OAuth Apps List */}
       <div className="max-w-4xl">

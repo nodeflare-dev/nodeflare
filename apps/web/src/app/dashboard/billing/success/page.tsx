@@ -8,12 +8,7 @@ import { Button } from '@/components/ui/button';
 import { CheckCircle } from 'lucide-react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
-
-interface Workspace {
-  id: string;
-  name: string;
-  plan: string;
-}
+import { useWorkspace } from '@/hooks/use-workspace';
 
 interface Subscription {
   plan: string;
@@ -26,12 +21,7 @@ export default function BillingSuccessPage() {
   const [isComplete, setIsComplete] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
 
-  const { data: workspaces } = useQuery<Workspace[]>({
-    queryKey: ['workspaces'],
-    queryFn: () => api.get('/workspaces'),
-  });
-
-  const currentWorkspace = workspaces?.[0];
+  const { activeWorkspace: currentWorkspace } = useWorkspace();
 
   // Poll subscription status
   const { data: subscription } = useQuery<Subscription>({

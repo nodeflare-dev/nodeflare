@@ -115,6 +115,10 @@ pub enum ServerStatus {
     Running,
     Failed,
     Stopped,
+    /// Soft-deleted: the row is being torn down. The Fly app teardown runs (DestroyJob),
+    /// and only after it is confirmed is the row hard-deleted. Servers in this state are
+    /// treated as gone by the UI/proxy.
+    Deleting,
 }
 
 impl Default for ServerStatus {
@@ -522,6 +526,9 @@ pub struct CreateServerRequest {
     /// When false, skip NodeFlare authentication layer (for servers that handle their own auth)
     /// Defaults to true if not specified
     pub auth_enabled: Option<bool>,
+    /// User-selected machine memory in MB (256/512/1024/2048). None = auto.
+    /// Validated against the workspace plan's ceiling at the API layer.
+    pub memory_mb: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -545,6 +552,8 @@ pub struct UpdateServerRequest {
     pub build_command: Option<String>,
     /// When false, skip NodeFlare authentication layer (for servers that handle their own auth)
     pub auth_enabled: Option<bool>,
+    /// User-selected machine memory in MB (256/512/1024/2048). None = leave unchanged.
+    pub memory_mb: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -617,6 +626,8 @@ pub struct ServerResponse {
     pub build_command: Option<String>,
     /// When false, NodeFlare authentication is disabled (for servers with their own auth)
     pub auth_enabled: bool,
+    /// User-selected machine memory in MB (None = auto).
+    pub memory_mb: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

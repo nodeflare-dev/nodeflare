@@ -20,6 +20,9 @@ stripe = { package = "async-stripe", version = "0.39", default-features = false,
     "webhook-events",
 ] }
 
+# HTTP (raw calls for Billing Meter Events, which async-stripe 0.39 lacks)
+reqwest.workspace = true
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true

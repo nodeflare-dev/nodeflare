@@ -47,6 +47,10 @@ impl Plan {
     }
 }
 
+/// Allowed per-server memory sizes (MB), smallest first. The Free plan is capped at
+/// the smallest entry; paid plans raise the ceiling via [`PlanLimits::max_memory_mb`].
+pub const MEMORY_LADDER_MB: &[u32] = &[256, 512, 1024, 2048];
+
 /// Plan limits and quotas
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanLimits {
@@ -58,6 +62,9 @@ pub struct PlanLimits {
     pub max_requests_per_month: u64,
     /// Maximum number of team members (for Team/Enterprise)
     pub max_team_members: u32,
+    /// Maximum machine memory a server may be assigned, in MB. Acts as the ceiling
+    /// for the user-selectable memory ladder ([`MEMORY_LADDER_MB`]).
+    pub max_memory_mb: u32,
     /// Log retention in days
     pub log_retention_days: u32,
     /// Custom domain support
@@ -76,6 +83,7 @@ impl Default for PlanLimits {
             max_deployments_per_month: 50,
             max_requests_per_month: 10_000,
             max_team_members: 1,
+            max_memory_mb: 256,
             log_retention_days: 7,
             custom_domains: false,
             priority_support: false,
@@ -130,6 +138,7 @@ pub static PLANS: &[PlanDefinition] = &[
             max_deployments_per_month: 50,
             max_requests_per_month: 10_000,
             max_team_members: 1,
+            max_memory_mb: 256,
             log_retention_days: 7,
             custom_domains: false,
             priority_support: false,
@@ -156,6 +165,7 @@ pub static PLANS: &[PlanDefinition] = &[
             max_deployments_per_month: 500,
             max_requests_per_month: 500_000,
             max_team_members: 1,
+            max_memory_mb: 2048,
             log_retention_days: 30,
             custom_domains: true,
             priority_support: false,
@@ -183,6 +193,7 @@ pub static PLANS: &[PlanDefinition] = &[
             max_deployments_per_month: 2000,
             max_requests_per_month: 5_000_000,
             max_team_members: 10,
+            max_memory_mb: 2048,
             log_retention_days: 90,
             custom_domains: true,
             priority_support: true,
@@ -214,6 +225,7 @@ pub static PLANS: &[PlanDefinition] = &[
             max_deployments_per_month: 100_000, // 100K deployments/month
             max_requests_per_month: 1_000_000_000, // 1B requests/month
             max_team_members: 1_000,          // 1K team members
+            max_memory_mb: 2048,              // ceiling = ladder max (raise once metered)
             log_retention_days: 365,
             custom_domains: true,
             priority_support: true,
@@ -232,6 +244,35 @@ pub static PLANS: &[PlanDefinition] = &[
         ],
     },
 ];
+
+/// Why a user-requested per-server memory size was rejected.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemoryChoiceError {
+    /// Not one of the allowed [`MEMORY_LADDER_MB`] sizes.
+    NotOnLadder,
+    /// Exceeds the plan's ceiling. Carries the ceiling for the error message.
+    ExceedsPlan { ceiling_mb: u32 },
+}
+
+/// Validate a user-selected memory size (MB) against the allowed ladder and the
+/// plan ceiling. `None` means "auto" and is always allowed.
+pub fn validate_memory_choice(
+    memory_mb: Option<u32>,
+    limits: &PlanLimits,
+) -> Result<(), MemoryChoiceError> {
+    let Some(mb) = memory_mb else {
+        return Ok(());
+    };
+    if !MEMORY_LADDER_MB.contains(&mb) {
+        return Err(MemoryChoiceError::NotOnLadder);
+    }
+    if mb > limits.max_memory_mb {
+        return Err(MemoryChoiceError::ExceedsPlan {
+            ceiling_mb: limits.max_memory_mb,
+        });
+    }
+    Ok(())
+}
 
 /// Get plan definition by plan type
 pub fn get_plan_definition(plan: Plan) -> Option<&'static PlanDefinition> {
@@ -273,4 +314,40 @@ pub fn get_plan_by_price_id(price_id: &str) -> Option<Plan> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_plan_only_allows_smallest_memory() {
+        let free = Plan::Free.limits();
+        assert_eq!(free.max_memory_mb, MEMORY_LADDER_MB[0]);
+        // None (auto) is always fine.
+        assert!(validate_memory_choice(None, &free).is_ok());
+        // The smallest size is allowed; anything larger is rejected with the ceiling.
+        assert!(validate_memory_choice(Some(256), &free).is_ok());
+        assert_eq!(
+            validate_memory_choice(Some(512), &free),
+            Err(MemoryChoiceError::ExceedsPlan { ceiling_mb: 256 })
+        );
+    }
+
+    #[test]
+    fn pro_plan_allows_up_to_2gb() {
+        let pro = Plan::Pro.limits();
+        assert_eq!(pro.max_memory_mb, 2048);
+        for &mb in MEMORY_LADDER_MB {
+            assert!(validate_memory_choice(Some(mb), &pro).is_ok(), "{mb} should fit Pro");
+        }
+    }
+
+    #[test]
+    fn off_ladder_sizes_are_rejected() {
+        let pro = Plan::Pro.limits();
+        // 768 is between rungs and 4096 is above the ladder entirely.
+        assert_eq!(validate_memory_choice(Some(768), &pro), Err(MemoryChoiceError::NotOnLadder));
+        assert_eq!(validate_memory_choice(Some(4096), &pro), Err(MemoryChoiceError::NotOnLadder));
+    }
 }

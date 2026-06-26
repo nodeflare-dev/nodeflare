@@ -21,9 +21,11 @@
 //! branch for "the pinned Machine is stopped" — Fly's proxy wakes a stopped Machine
 //! when a request is forced to it (verified empirically), so forcing always resolves.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 
 use axum::http::HeaderMap;
+use fred::interfaces::LuaInterface;
 use fred::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -34,8 +36,22 @@ const SESSION_TTL_SECS: i64 = 3600;
 /// How long the per-app Machine list is cached in Redis.
 const MACHINE_LIST_TTL_SECS: i64 = 30;
 
-/// Round-robin cursor for picking a Machine on `initialize`.
-static RR_CURSOR: AtomicUsize = AtomicUsize::new(0);
+/// Per-app round-robin cursors for picking a Machine on `initialize`. A single
+/// global cursor doesn't round-robin per app (interleaved apps skew each other),
+/// so we key the cursor by app name.
+static RR_CURSORS: LazyLock<Mutex<HashMap<String, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn next_rr(app: &str, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let mut cursors = RR_CURSORS.lock().unwrap_or_else(|p| p.into_inner());
+    let cur = cursors.entry(app.to_string()).or_insert(0);
+    let idx = *cur % len;
+    *cur = cur.wrapping_add(1);
+    idx
+}
 
 /// Outcome of an affinity decision for a single request.
 #[derive(Default)]
@@ -45,6 +61,9 @@ pub struct Affinity {
     /// When set, this request is an `initialize`: bind the session id returned by the
     /// upstream to this Machine id once the response is available.
     pub bind_session_to: Option<String>,
+    /// Fly app name this decision is scoped to (used to namespace the session key
+    /// when binding the new session on an `initialize` response).
+    pub app: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -66,13 +85,36 @@ pub async fn decide(
     headers: &HeaderMap,
     is_initialize: bool,
 ) -> Affinity {
+    let app = app_name_from_target(target_url);
+
     // Follow-up request: route to the Machine that owns this session.
     if let Some(session_id) = headers.get("mcp-session-id").and_then(|v| v.to_str().ok()) {
-        if let Some(machine) = lookup_session(state, session_id).await {
-            return Affinity {
-                forced_machine: Some(machine),
-                bind_session_to: None,
-            };
+        // Non-fly endpoints have no Machine concept; never force.
+        let app = match app {
+            Some(a) => a,
+            None => return Affinity::default(),
+        };
+        if let Some(machine) = lookup_session(state, &app, session_id).await {
+            // Cross-check the bound Machine still exists. Machines are recreated with
+            // fresh ids on every deploy, so a stale binding would force traffic onto a
+            // dead id and break every session after a deploy. If it's gone, drop the
+            // binding and let Fly route normally (the session is lost either way).
+            let machines = machine_list(state, &app).await;
+            let alive = machines.iter().any(|m| m.id == machine);
+            if alive {
+                return Affinity {
+                    forced_machine: Some(machine),
+                    bind_session_to: None,
+                    app: Some(app),
+                };
+            }
+            tracing::info!(
+                "affinity: bound machine {} for session {} no longer exists, dropping binding",
+                machine,
+                session_id
+            );
+            delete_session(state, &app, session_id).await;
+            return Affinity::default();
         }
         // Unknown/expired session -> don't force; let Fly route normally.
         return Affinity::default();
@@ -80,12 +122,13 @@ pub async fn decide(
 
     // initialize: pick a Machine, force it, and bind the new session to it.
     if is_initialize {
-        if let Some(app) = app_name_from_target(target_url) {
+        if let Some(app) = app {
             let machines = machine_list(state, &app).await;
-            if let Some(machine) = pick_machine(&machines) {
+            if let Some(machine) = pick_machine(&app, &machines) {
                 return Affinity {
                     forced_machine: Some(machine.clone()),
                     bind_session_to: Some(machine),
+                    app: Some(app),
                 };
             }
         }
@@ -98,8 +141,12 @@ pub async fn decide(
 ///
 /// `session_id` is the `Mcp-Session-Id` the upstream returned (if any).
 pub async fn capture_session(state: &ProxyState, affinity: &Affinity, session_id: Option<&str>) {
-    if let (Some(machine), Some(session_id)) = (affinity.bind_session_to.as_deref(), session_id) {
-        store_session(state, session_id, machine).await;
+    if let (Some(app), Some(machine), Some(session_id)) = (
+        affinity.app.as_deref(),
+        affinity.bind_session_to.as_deref(),
+        session_id,
+    ) {
+        store_session(state, app, session_id, machine).await;
         tracing::info!("affinity: bound session {} -> machine {}", session_id, machine);
     }
 }
@@ -112,7 +159,7 @@ fn app_name_from_target(target_url: &str) -> Option<String> {
     host.strip_suffix(".fly.dev").map(|s| s.to_string())
 }
 
-fn pick_machine(machines: &[Machine]) -> Option<String> {
+fn pick_machine(app: &str, machines: &[Machine]) -> Option<String> {
     if machines.is_empty() {
         return None;
     }
@@ -124,30 +171,33 @@ fn pick_machine(machines: &[Machine]) -> Option<String> {
     } else {
         started
     };
-    let idx = RR_CURSOR.fetch_add(1, Ordering::Relaxed) % pool.len();
+    let idx = next_rr(app, pool.len());
     Some(pool[idx].id.clone())
 }
 
-async fn lookup_session(state: &ProxyState, session_id: &str) -> Option<String> {
-    let key = session_key(session_id);
-    let machine: Option<String> = state.redis.get(&key).await.ok().flatten();
-    let machine = machine?;
-    // Refresh the TTL on use (re-set; avoids version-specific EXPIRE signatures).
-    let _: Result<(), _> = state
+/// `GETEX`-style lookup: fetch the binding and refresh its TTL in a single round
+/// trip (fred 8 has no `getex` helper, so we use a tiny Lua script).
+const GETEX_SCRIPT: &str = r#"
+local v = redis.call('GET', KEYS[1])
+if v then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return v
+"#;
+
+async fn lookup_session(state: &ProxyState, app: &str, session_id: &str) -> Option<String> {
+    let key = session_key(app, session_id);
+    let machine: Option<String> = state
         .redis
-        .set(
-            &key,
-            machine.as_str(),
-            Some(Expiration::EX(SESSION_TTL_SECS)),
-            None,
-            false,
-        )
-        .await;
-    Some(machine)
+        .eval(GETEX_SCRIPT, &[key], &[SESSION_TTL_SECS.to_string()])
+        .await
+        .ok()
+        .flatten();
+    machine
 }
 
-async fn store_session(state: &ProxyState, session_id: &str, machine: &str) {
-    let key = session_key(session_id);
+async fn store_session(state: &ProxyState, app: &str, session_id: &str, machine: &str) {
+    let key = session_key(app, session_id);
     let _: Result<(), _> = state
         .redis
         .set(
@@ -160,8 +210,14 @@ async fn store_session(state: &ProxyState, session_id: &str, machine: &str) {
         .await;
 }
 
-fn session_key(session_id: &str) -> String {
-    format!("proxy:mcpaff:sess:{}", session_id)
+async fn delete_session(state: &ProxyState, app: &str, session_id: &str) {
+    let key = session_key(app, session_id);
+    let _: Result<(), _> = state.redis.del(&key).await;
+}
+
+/// Namespaced by app so two apps can't ever collide on a session id.
+fn session_key(app: &str, session_id: &str) -> String {
+    format!("proxy:mcpaff:sess:{}:{}", app, session_id)
 }
 
 /// Fetch the app's Machine list, cached in Redis for `MACHINE_LIST_TTL_SECS`.

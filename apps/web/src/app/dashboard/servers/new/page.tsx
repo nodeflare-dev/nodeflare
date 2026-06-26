@@ -12,6 +12,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { GitHubAccountSelector } from '@/components/github/GitHubAccountSelector';
+import { MemorySelect } from '@/components/servers/memory-select';
+import { DEFAULT_MEMORY_MB } from '@/lib/plans';
+import { useWorkspace } from '@/hooks/use-workspace';
 import { SiNodedotjs, SiPython, SiGo, SiRust, SiDocker, SiGithub } from 'react-icons/si';
 import { useSetPageHeader } from '../../page-header';
 
@@ -26,12 +29,17 @@ export default function NewServerPage() {
 
   useSetPageHeader(t('create.title'), <Server className="w-4 h-4" />);
 
-  const { data: workspaces } = useQuery<{ id: string; name: string }[]>({
-    queryKey: ['workspaces'],
-    queryFn: () => api.get('/workspaces'),
-  });
+  const { activeWorkspace } = useWorkspace();
 
-  const workspaceId = workspaces?.[0]?.id;
+  const workspaceId = activeWorkspace?.id;
+
+  // Plan limits drive which memory sizes are selectable (Free is capped at 256MB).
+  const { data: plans } = useQuery<{ plan: string; limits: { max_memory_mb: number } }[]>({
+    queryKey: ['billing-plans'],
+    queryFn: () => api.get('/billing/plans'),
+  });
+  const currentPlan = activeWorkspace?.plan || 'free';
+  const maxMemoryMb = plans?.find((p) => p.plan === currentPlan)?.limits.max_memory_mb ?? 256;
 
   // Linked GitHub accounts
   const { data: linkedAccounts, isLoading: accountsLoading } = useQuery<LinkedGitHubAccount[]>({
@@ -80,6 +88,7 @@ export default function NewServerPage() {
     root_directory: '',
     mcp_path: '/mcp',
     auth_enabled: true,
+    memory_mb: DEFAULT_MEMORY_MB,
   });
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -570,6 +579,13 @@ export default function NewServerPage() {
                     />
                   </div>
                 </div>
+
+                {/* Machine memory */}
+                <MemorySelect
+                  value={formData.memory_mb ?? DEFAULT_MEMORY_MB}
+                  onChange={(mb) => setFormData((prev) => ({ ...prev, memory_mb: mb }))}
+                  maxMemoryMb={maxMemoryMb}
+                />
 
                 {/* Auth Enabled Toggle */}
                 <div className="pt-4 border-t border-gray-100">

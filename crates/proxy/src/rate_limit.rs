@@ -2,16 +2,78 @@ use axum::http::HeaderMap;
 use chrono::Datelike;
 use fred::interfaces::{KeysInterface, LuaInterface};
 use mcp_billing::Plan;
-use mcp_db::{McpServer, WorkspaceRepository};
+use mcp_db::WorkspaceRepository;
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::{LazyLock, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+use crate::redis_cache::{CachedServer, CachedWorkspace};
 use crate::{ProxyError, ProxyState};
 
-/// Extract real client IP from request, handling reverse proxy headers
+/// Process-local fixed-window fallback limiter.
 ///
-/// Security: Only trusts proxy headers when TRUST_PROXY_HEADERS=true
-/// Priority: fly-client-ip > cf-connecting-ip > x-real-ip > x-forwarded-for > direct connection
+/// When Redis is unreachable the distributed limiter cannot enforce anything; the
+/// previous behaviour was to silently fail *open*, which means a Redis outage drops
+/// all protection across the entire fleet simultaneously. This in-memory limiter
+/// keeps a coarse per-process cap so a single proxy instance can't be trivially
+/// abused during an outage. It is intentionally conservative and best-effort
+/// (per-process, not cluster-wide).
+static FALLBACK_LIMITER: LazyLock<Mutex<HashMap<String, (u64, u64)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Returns true if the request is allowed by the process-local fallback limiter.
+/// `window_bucket` partitions time into `window_secs` slots; counts reset per slot.
+fn fallback_allow(key: &str, limit: u64, window_secs: u64) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let window = if window_secs == 0 { now } else { now / window_secs };
+
+    let mut map = match FALLBACK_LIMITER.lock() {
+        Ok(m) => m,
+        Err(p) => p.into_inner(),
+    };
+
+    // Opportunistic cleanup to bound memory: drop entries from older windows.
+    if map.len() > 10_000 {
+        map.retain(|_, (w, _)| *w == window);
+    }
+
+    let entry = map.entry(key.to_string()).or_insert((window, 0));
+    if entry.0 != window {
+        *entry = (window, 0);
+    }
+    entry.1 += 1;
+    entry.1 <= limit
+}
+
+/// Record that the distributed (Redis) limiter failed open and we fell back to the
+/// process-local limiter, for alerting.
+fn note_redis_fallback(scope: &'static str) {
+    metrics::counter!("proxy_redis_fallback_total", "scope" => scope).increment(1);
+    tracing::warn!(
+        "rate_limit: Redis unavailable, using process-local fallback limiter (scope={})",
+        scope
+    );
+}
+
+/// Extract real client IP from request, handling reverse proxy headers.
+///
+/// Security: only trusts proxy headers when `TRUST_PROXY_HEADERS=true`.
+///
+/// The originating client controls the *leftmost* entries of `X-Forwarded-For`
+/// (and can inject `fly-client-ip`/`cf-connecting-ip` headers when we are not
+/// actually behind that provider). Trusting those lets an attacker spoof an
+/// arbitrary IP — evading their own rate-limit/lockout counters or poisoning a
+/// victim's. We therefore only trust the *rightmost* hop(s) that our own
+/// infrastructure appended, and only honour `fly-client-ip` when explicitly told
+/// we sit behind Fly's edge (`PROXY_BEHIND_FLY=true`).
+///
+/// `TRUSTED_PROXY_HOPS` (default 1) is the number of trusted reverse proxies in
+/// front of us; we take the IP `hops` entries from the right of `X-Forwarded-For`.
 pub fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr) -> String {
     let trust_proxy = std::env::var("TRUST_PROXY_HEADERS")
         .map(|v| v == "true" || v == "1")
@@ -21,37 +83,55 @@ pub fn extract_client_ip(headers: &HeaderMap, addr: &SocketAddr) -> String {
         return addr.ip().to_string();
     }
 
-    // Fly.io specific header (most trusted when using Fly.io)
-    if let Some(fly_ip) = headers.get("fly-client-ip").and_then(|v| v.to_str().ok()) {
-        if is_valid_ip(fly_ip) {
-            return fly_ip.to_string();
+    // Fly.io edge header — only trustworthy when we are actually behind Fly,
+    // otherwise a client can set it directly.
+    let behind_fly = std::env::var("PROXY_BEHIND_FLY")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    if behind_fly {
+        if let Some(fly_ip) = headers.get("fly-client-ip").and_then(|v| v.to_str().ok()) {
+            if is_valid_ip(fly_ip) {
+                return fly_ip.to_string();
+            }
         }
     }
 
-    // Cloudflare header
+    // Cloudflare / nginx set these by *replacing* the value (not appending), so a
+    // client behind the proxy cannot forge them — safe to trust under TRUST_PROXY_HEADERS.
     if let Some(cf_ip) = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok()) {
         if is_valid_ip(cf_ip) {
             return cf_ip.to_string();
         }
     }
-
-    // Nginx/generic reverse proxy header
     if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
         if is_valid_ip(real_ip) {
             return real_ip.to_string();
         }
     }
 
-    // X-Forwarded-For: take the first (leftmost) IP which is the original client
+    // Number of trusted reverse-proxy hops in front of us.
+    let trusted_hops: usize = std::env::var("TRUSTED_PROXY_HOPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(1);
+
+    // X-Forwarded-For: trust only the hop our own proxy appended. The list is
+    // ordered client, proxy1, proxy2, ...; the rightmost entries are the ones we
+    // control. Skip `trusted_hops - 1` from the right and take that IP.
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-        if let Some(first_ip) = xff.split(',').next().map(|s| s.trim()) {
-            if is_valid_ip(first_ip) {
-                return first_ip.to_string();
+        let ips: Vec<&str> = xff.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        if !ips.is_empty() {
+            let idx = ips.len().saturating_sub(trusted_hops);
+            if let Some(ip) = ips.get(idx) {
+                if is_valid_ip(ip) {
+                    return ip.to_string();
+                }
             }
         }
     }
 
-    // Fall back to direct connection IP
+    // Fall back to direct connection IP (the actual socket peer).
     addr.ip().to_string()
 }
 
@@ -187,7 +267,7 @@ return current
 pub async fn check(
     state: &ProxyState,
     credential_id: Uuid,
-    server: &McpServer,
+    server: &CachedServer,
 ) -> Result<(), ProxyError> {
     // Use minute-based key for fixed window rate limiting
     let now = chrono::Utc::now();
@@ -198,15 +278,27 @@ pub async fn check(
     let ttl = WINDOW_SIZE_SECONDS + 5;
 
     // Execute atomic rate limiting with Lua script
-    let result: i64 = state
+    let result: Result<i64, _> = state
         .redis
         .eval(
             RATE_LIMIT_SCRIPT,
             &[key],
             &[limit.to_string(), ttl.to_string()],
         )
-        .await
-        .map_err(|e| ProxyError::Internal(format!("Redis error: {}", e)))?;
+        .await;
+
+    let result = match result {
+        Ok(v) => v,
+        Err(_) => {
+            // Redis down: enforce a process-local cap instead of failing fully open.
+            note_redis_fallback("rate_limit");
+            let fb_key = format!("rl:{}:{}", credential_id, server.id);
+            if fallback_allow(&fb_key, limit.max(1) as u64, WINDOW_SIZE_SECONDS as u64) {
+                return Ok(());
+            }
+            return Err(ProxyError::RateLimitExceeded);
+        }
+    };
 
     if result < 0 {
         return Err(ProxyError::RateLimitExceeded);
@@ -215,16 +307,60 @@ pub async fn check(
     Ok(())
 }
 
-/// Check monthly request quota based on workspace plan
-pub async fn check_monthly_quota(
+/// Atomic monthly quota: GET current, reject if at/over limit, else INCR + set TTL
+/// when the counter is first created. Single round-trip, so there is no
+/// check-then-increment TOCTOU and no window where INCR succeeds but EXPIRE is lost.
+const MONTHLY_QUOTA_SCRIPT: &str = r#"
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local current = tonumber(redis.call('GET', key) or '0')
+if current >= limit then
+    return -1
+end
+local newval = redis.call('INCR', key)
+if newval == 1 then
+    redis.call('EXPIRE', key, ttl)
+end
+return newval
+"#;
+
+/// Load the workspace plan/subscription for the quota hot path, preferring the
+/// short-TTL Redis cache and falling back to Postgres (then populating the cache).
+async fn load_workspace(
     state: &ProxyState,
     workspace_id: Uuid,
-) -> Result<(), ProxyError> {
-    // Get workspace to check plan
+) -> Result<CachedWorkspace, ProxyError> {
+    if let Some(cached) = state.redis_cache.get_workspace(&workspace_id).await {
+        return Ok(cached);
+    }
+
     let workspace = WorkspaceRepository::find_by_id(&state.db, workspace_id)
         .await
         .map_err(|e| ProxyError::Internal(format!("Database error: {}", e)))?
         .ok_or_else(|| ProxyError::Internal("Workspace not found".into()))?;
+
+    // Populate cache (async, don't block).
+    let redis_cache = state.redis_cache.clone();
+    let ws_clone = workspace.clone();
+    tokio::spawn(async move {
+        redis_cache.set_workspace(&ws_clone).await;
+    });
+
+    Ok(CachedWorkspace::from(&workspace))
+}
+
+/// Check the monthly request quota for a workspace **and** increment the counter
+/// atomically before the request is forwarded.
+///
+/// Incrementing inline (rather than fire-and-forget after a successful response)
+/// removes the TOCTOU where many concurrent requests all read an under-limit count
+/// and pass. The counter is incremented for every accepted request.
+pub async fn check_and_increment_monthly_quota(
+    state: &ProxyState,
+    workspace_id: Uuid,
+) -> Result<(), ProxyError> {
+    let workspace = load_workspace(state, workspace_id).await?;
 
     // Check subscription status - block if past_due or cancelled
     if let Some(ref status) = workspace.subscription_status {
@@ -253,9 +389,7 @@ pub async fn check_monthly_quota(
         _ => Plan::Free,
     };
     let limits = billing_plan.limits();
-
-    // Scalability: All plans now have finite limits (Enterprise = 1B/month)
-    // This prevents resource exhaustion while still providing very high limits
+    let limit = limits.max_requests_per_month;
 
     // Get current month key
     let now = chrono::Utc::now();
@@ -266,47 +400,7 @@ pub async fn check_monthly_quota(
         now.month()
     );
 
-    // Get current count from Redis
-    let count: Option<i64> = state
-        .redis
-        .get(&month_key)
-        .await
-        .map_err(|e| ProxyError::Internal(format!("Redis error: {}", e)))?;
-
-    let current_count = count.unwrap_or(0) as u64;
-
-    if current_count >= limits.max_requests_per_month {
-        return Err(ProxyError::QuotaExceeded(format!(
-            "Monthly request quota exceeded ({}/{}). Please upgrade your plan.",
-            current_count, limits.max_requests_per_month
-        )));
-    }
-
-    Ok(())
-}
-
-/// Increment monthly request counter
-pub async fn increment_monthly_counter(
-    state: &ProxyState,
-    workspace_id: Uuid,
-) -> Result<(), ProxyError> {
-    let now = chrono::Utc::now();
-    let month_key = format!(
-        "monthly_requests:{}:{:04}-{:02}",
-        workspace_id,
-        now.year(),
-        now.month()
-    );
-
-    // Increment counter
-    let _: i64 = state
-        .redis
-        .incr(&month_key)
-        .await
-        .map_err(|e| ProxyError::Internal(format!("Redis error: {}", e)))?;
-
-    // Set TTL to expire after this month (add some buffer days)
-    // Calculate days remaining in month + 5 days buffer
+    // TTL to expire after this month (+5 days buffer).
     let days_in_month = match now.month() {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -315,11 +409,31 @@ pub async fn increment_monthly_counter(
     };
     let ttl_seconds = ((days_in_month - now.day() + 5) as i64) * 24 * 60 * 60;
 
-    let _: () = state
+    let result: Result<i64, _> = state
         .redis
-        .expire(&month_key, ttl_seconds)
-        .await
-        .map_err(|e| ProxyError::Internal(format!("Redis error: {}", e)))?;
+        .eval(
+            MONTHLY_QUOTA_SCRIPT,
+            &[month_key],
+            &[limit.to_string(), ttl_seconds.to_string()],
+        )
+        .await;
 
-    Ok(())
+    match result {
+        Ok(v) if v < 0 => Err(ProxyError::QuotaExceeded(format!(
+            "Monthly request quota exceeded (limit {}). Please upgrade your plan.",
+            limit
+        ))),
+        Ok(_) => Ok(()),
+        Err(_) => {
+            // Redis down: the monthly counter can't be tracked process-locally, but a
+            // coarse per-process per-minute cap still bounds abuse during the outage.
+            note_redis_fallback("monthly_quota");
+            let fb_key = format!("mq:{}", workspace_id);
+            if fallback_allow(&fb_key, DEFAULT_RATE_LIMIT as u64, WINDOW_SIZE_SECONDS as u64) {
+                Ok(())
+            } else {
+                Err(ProxyError::RateLimitExceeded)
+            }
+        }
+    }
 }
