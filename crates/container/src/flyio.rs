@@ -746,10 +746,20 @@ PersistentKeepalive = 15
             self.org_slug
         );
 
+        // Fly's Prometheus endpoint is strict about the auth scheme. Modern Fly tokens are
+        // macaroons that already carry the `FlyV1 ` scheme, so they must be sent verbatim;
+        // wrapping them as `Bearer FlyV1 ...` yields 401 "resolving organization". (The
+        // Machines/GraphQL endpoints tolerate the Bearer wrapper, so only this call needs it.)
+        let auth_header = if self.api_token.starts_with("FlyV1 ") {
+            self.api_token.clone()
+        } else {
+            format!("Bearer {}", self.api_token)
+        };
+
         let response = self
             .http_client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.api_token))
+            .header("Authorization", auth_header)
             .query(&[
                 ("query", query),
                 ("start", &start.to_string()),
