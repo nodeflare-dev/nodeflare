@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useTranslations } from 'next-intl';
+import { ChevronDown } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { MEMORY_LADDER_MB } from '@/lib/plans';
@@ -34,22 +35,26 @@ export function MemorySelect({ value, onChange, maxMemoryMb, id = 'memory_mb' }:
     <div className="space-y-2">
       <Label htmlFor={id}>{t('create.machineMemory')}</Label>
       <p className="text-xs text-muted-foreground">{t('create.machineMemoryHelp')}</p>
-      <Select
-        id={id}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full sm:w-56 rounded-lg"
-      >
-        {MEMORY_LADDER_MB.map((mb) => {
-          const locked = mb > maxMemoryMb;
-          return (
-            <option key={mb} value={mb} disabled={locked}>
-              {formatSize(mb)}
-              {locked ? ` — ${t('create.machineMemoryLocked')}` : ''}
-            </option>
-          );
-        })}
-      </Select>
+      <div className="relative w-full sm:w-48">
+        <Select
+          id={id}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="peer w-full appearance-none rounded-lg pr-9"
+        >
+          {MEMORY_LADDER_MB.map((mb) => {
+            const locked = mb > maxMemoryMb;
+            return (
+              <option key={mb} value={mb} disabled={locked}>
+                {formatSize(mb)}
+                {locked ? ` — ${t('create.machineMemoryLocked')}` : ''}
+              </option>
+            );
+          })}
+        </Select>
+        {/* Custom caret: inset from the edge and light when idle, darker on focus. */}
+        <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 transition-colors peer-focus:text-gray-600" />
+      </div>
       {capped && (
         <p className="text-xs text-muted-foreground">
           {t('upgrade.memoryLimit')}{' '}

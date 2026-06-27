@@ -452,7 +452,7 @@ function SortableNavLink({
           collapsed ? 'justify-center' : ''
         } ${
           isActive
-            ? 'bg-gray-100 text-foreground'
+            ? 'bg-gray-200 text-foreground'
             : 'hover:bg-gray-50 text-gray-500 hover:text-foreground'
         } ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         title={collapsed ? String(children) : undefined}
