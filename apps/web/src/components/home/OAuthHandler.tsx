@@ -1,9 +1,14 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { useAuth } from '@/hooks/use-auth';
+
+// Guard against bouncing between the landing page and /login forever if a session can't be
+// established. Stores a timestamp; only honored briefly so an abandoned flow can retry later.
+const LOGIN_TRIED_KEY = 'nf_oauth_login_tried';
+const LOGIN_RETRY_WINDOW_MS = 30_000;
 
 // SECURITY: only follow same-site relative paths (block absolute / protocol-relative).
 function isSafeRelativePath(url: string): boolean {
@@ -15,30 +20,57 @@ function isSafeRelativePath(url: string): boolean {
   return !/[\x00-\x1f\x7f]/.test(url);
 }
 
+// Collapse an absolute URL the backend may hand us into a same-site relative path so it
+// survives the login round-trip's same-origin return_to validation.
+function toRelative(returnTo: string): string {
+  try {
+    const u = new URL(returnTo, window.location.origin);
+    return `${u.pathname}${u.search}`;
+  } catch {
+    return returnTo;
+  }
+}
+
 /**
  * Full-screen branded "in progress" screen shown while we finish an auth/authorization
  * redirect. The cross-domain OAuth flow has to bounce back to the frontend (the session
  * cookie lives here, not on the API domain), so without this the user would briefly see
  * the raw marketing landing page.
  */
-function AuthorizingScreen({ message }: { message: string }) {
+function AuthorizingScreen({ message, showRetry }: { message: string; showRetry?: boolean }) {
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-white">
-      <div className="flex w-full max-w-[260px] flex-col items-center px-6">
+      <div className="flex w-full max-w-[260px] flex-col items-center px-6 text-center">
         <Image src="/logo2.png" alt="Nodeflare" width={153} height={32} priority className="h-9 w-auto" />
         <p className="mt-6 text-gray-700 font-medium">{message}</p>
-        <div className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-violet-100">
-          <div className="h-full w-2/5 rounded-full bg-gradient-to-r from-violet-400 via-violet-600 to-violet-400 animate-indeterminate" />
-        </div>
+        {showRetry ? (
+          <a href="/login" className="mt-4 text-sm text-violet-600 hover:underline">
+            Try signing in again
+          </a>
+        ) : (
+          <div className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-violet-100">
+            <div className="h-full w-2/5 rounded-full bg-gradient-to-r from-violet-400 via-violet-600 to-violet-400 animate-indeterminate" />
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 export function OAuthHandler() {
-  const { user, isLoading } = useAuth();
+  const { refreshUser } = useAuth();
   const searchParams = useSearchParams();
   const returnTo = searchParams.get('return_to');
+  const [failed, setFailed] = useState(false);
+
+  const isAuthorize = (() => {
+    if (!returnTo || typeof window === 'undefined') return false;
+    try {
+      return new URL(returnTo, window.location.origin).pathname === '/oauth/authorize';
+    } catch {
+      return false;
+    }
+  })();
 
   const isAuthorize = (() => {
     if (!returnTo) return false;
@@ -50,27 +82,37 @@ export function OAuthHandler() {
   })();
 
   useEffect(() => {
-    if (!returnTo || isLoading) return;
-
-    // Not authenticated on the frontend either: send to login, preserving return_to so the
-    // user lands back here and the flow continues after signing in. The backend hands us an
-    // absolute API URL (e.g. https://api.../oauth/authorize?...); collapse it to a same-site
-    // relative path so it survives the login round-trip's same-origin return_to validation
-    // (otherwise it's rejected and the user is dropped on /dashboard mid-authorization).
-    if (!user) {
-      let loginReturn = returnTo;
-      try {
-        const u = new URL(returnTo, window.location.origin);
-        loginReturn = `${u.pathname}${u.search}`;
-      } catch {
-        // keep returnTo as-is if it can't be parsed
-      }
-      window.location.href = `/login?return_to=${encodeURIComponent(loginReturn)}`;
-      return;
-    }
-
+    if (!returnTo) return;
     let cancelled = false;
+
     (async () => {
+      // Resolve auth DEFINITIVELY before deciding. useAuth exposes placeholderData, so
+      // `user` can read as null for a render tick before /auth/me actually resolves —
+      // relying on that bounced freshly-signed-in users back to /login (a redirect loop).
+      let authedUser = null;
+      try {
+        const result = await refreshUser();
+        authedUser = result.data ?? null;
+      } catch {
+        authedUser = null;
+      }
+      if (cancelled) return;
+
+      if (!authedUser) {
+        // Not signed in. Send to login once; if we come back still unauthenticated within
+        // the retry window, stop looping and offer a manual retry instead.
+        const tried = Number(sessionStorage.getItem(LOGIN_TRIED_KEY) || 0);
+        if (tried && Date.now() - tried < LOGIN_RETRY_WINDOW_MS) {
+          setFailed(true);
+          return;
+        }
+        sessionStorage.setItem(LOGIN_TRIED_KEY, String(Date.now()));
+        window.location.href = `/login?return_to=${encodeURIComponent(toRelative(returnTo))}`;
+        return;
+      }
+
+      // Signed in — clear the loop guard and finish the flow.
+      sessionStorage.removeItem(LOGIN_TRIED_KEY);
       try {
         const url = new URL(returnTo, window.location.origin);
 
@@ -91,7 +133,7 @@ export function OAuthHandler() {
               scope: url.searchParams.get('scope') || '*',
             }),
           });
-
+          if (cancelled) return;
           if (response.ok) {
             const data = await response.json();
             const redirectUri = url.searchParams.get('redirect_uri');
@@ -103,7 +145,7 @@ export function OAuthHandler() {
             }
           }
           // Authorization failed — fall back to the dashboard rather than hang.
-          if (!cancelled) window.location.href = '/dashboard';
+          window.location.href = '/dashboard';
           return;
         }
 
@@ -117,8 +159,11 @@ export function OAuthHandler() {
     return () => {
       cancelled = true;
     };
-  }, [user, isLoading, returnTo]);
+  }, [returnTo, refreshUser]);
 
   if (!returnTo) return null;
+  if (failed) {
+    return <AuthorizingScreen message="We couldn't finish signing you in." showRetry />;
+  }
   return <AuthorizingScreen message={isAuthorize ? 'Authorizing…' : 'Signing you in…'} />;
 }
