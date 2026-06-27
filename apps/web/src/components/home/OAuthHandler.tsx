@@ -22,14 +22,11 @@ function isSafeRelativePath(url: string): boolean {
 }
 
 // Collapse an absolute URL the backend may hand us into a same-site relative path so it
-// survives the login round-trip's same-origin return_to validation.
+// survives the login round-trip's same-origin return_to validation. String-only (no window)
+// so it's safe under SSR/Turbopack prerender.
 function toRelative(returnTo: string): string {
-  try {
-    const u = new URL(returnTo, window.location.origin);
-    return `${u.pathname}${u.search}`;
-  } catch {
-    return returnTo;
-  }
+  const stripped = returnTo.replace(/^https?:\/\/[^/]+/i, '');
+  return stripped.startsWith('/') ? stripped : returnTo;
 }
 
 /**
@@ -50,58 +47,6 @@ function AuthorizingScreen({ message, showRetry }: { message: string; showRetry?
           </a>
         ) : (
           <SquareLoader className="mt-6" />
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Guard against bouncing between the landing page and /login forever if a session can't be
-// established. Stores a timestamp; only honored briefly so an abandoned flow can retry later.
-const LOGIN_TRIED_KEY = 'nf_oauth_login_tried';
-const LOGIN_RETRY_WINDOW_MS = 30_000;
-
-// SECURITY: only follow same-site relative paths (block absolute / protocol-relative).
-function isSafeRelativePath(url: string): boolean {
-  if (!url.startsWith('/') || url.startsWith('//')) return false;
-  const lower = url.toLowerCase();
-  if (lower.includes('javascript:') || lower.includes('data:') || lower.includes('vbscript:')) {
-    return false;
-  }
-  return !/[\x00-\x1f\x7f]/.test(url);
-}
-
-// Collapse an absolute URL the backend may hand us into a same-site relative path so it
-// survives the login round-trip's same-origin return_to validation.
-function toRelative(returnTo: string): string {
-  try {
-    const u = new URL(returnTo, window.location.origin);
-    return `${u.pathname}${u.search}`;
-  } catch {
-    return returnTo;
-  }
-}
-
-/**
- * Full-screen branded "in progress" screen shown while we finish an auth/authorization
- * redirect. The cross-domain OAuth flow has to bounce back to the frontend (the session
- * cookie lives here, not on the API domain), so without this the user would briefly see
- * the raw marketing landing page.
- */
-function AuthorizingScreen({ message, showRetry }: { message: string; showRetry?: boolean }) {
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-white">
-      <div className="flex w-full max-w-[260px] flex-col items-center px-6 text-center">
-        <Image src="/logo2.png" alt="Nodeflare" width={153} height={32} priority className="h-9 w-auto" />
-        <p className="mt-6 text-gray-700 font-medium">{message}</p>
-        {showRetry ? (
-          <a href="/login" className="mt-4 text-sm text-violet-600 hover:underline">
-            Try signing in again
-          </a>
-        ) : (
-          <div className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-violet-100">
-            <div className="h-full w-2/5 rounded-full bg-gradient-to-r from-violet-400 via-violet-600 to-violet-400 animate-indeterminate" />
-          </div>
         )}
       </div>
     </div>
