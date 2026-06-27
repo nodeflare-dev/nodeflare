@@ -52,20 +52,6 @@ function BrandMark() {
   );
 }
 
-/** NodeFlare wordmark. */
-function BrandMark() {
-  return (
-    <Image
-      src="/logo2.png"
-      alt="Nodeflare"
-      width={153}
-      height={32}
-      priority
-      className="h-9 w-auto"
-    />
-  );
-}
-
 function AuthCallbackContent() {
   const t = useTranslations('auth.callback');
   const searchParams = useSearchParams();
