@@ -182,7 +182,12 @@ export default function NewServerPage() {
       return api.post<McpServer>(`/workspaces/${workspaceId}/servers`, data);
     },
     onSuccess: (server) => {
-      queryClient.invalidateQueries({ queryKey: ['servers'] });
+      // List views are keyed ['servers-list'|'servers-minimal'|'servers-basic', wsId]; a
+      // bare ['servers'] key doesn't match them. Invalidate each list prefix (react-query
+      // prefix-matches, so the workspace-scoped variants refresh too).
+      queryClient.invalidateQueries({ queryKey: ['servers-list'] });
+      queryClient.invalidateQueries({ queryKey: ['servers-minimal'] });
+      queryClient.invalidateQueries({ queryKey: ['servers-basic'] });
       router.push(`/dashboard/servers/${server.id}`);
     },
   });
