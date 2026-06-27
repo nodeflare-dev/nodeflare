@@ -822,16 +822,6 @@ async fn forward_request(
         }
     }
 
-    // Session affinity: pin a stateful session to the Fly Machine that owns it.
-    let is_initialize = mcp_info.method_str.as_deref() == Some("initialize");
-    let affinity = affinity::decide(state, target_url, &headers, is_initialize).await;
-    if let Some(machine) = affinity.forced_machine.as_deref() {
-        if let Ok(value) = HeaderValue::from_str(machine) {
-            headers.insert("fly-force-instance-id", value);
-            tracing::info!("affinity: forcing instance {}", machine);
-        }
-    }
-
     // SSE requests: use streaming (no buffering, minimal latency)
     if is_sse {
         tracing::info!("SSE request detected, using streaming forward to {}", target_url);
