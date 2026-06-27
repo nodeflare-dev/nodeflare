@@ -53,9 +53,19 @@ export function OAuthHandler() {
     if (!returnTo || isLoading) return;
 
     // Not authenticated on the frontend either: send to login, preserving return_to so the
-    // user lands back here and the flow continues after signing in.
+    // user lands back here and the flow continues after signing in. The backend hands us an
+    // absolute API URL (e.g. https://api.../oauth/authorize?...); collapse it to a same-site
+    // relative path so it survives the login round-trip's same-origin return_to validation
+    // (otherwise it's rejected and the user is dropped on /dashboard mid-authorization).
     if (!user) {
-      window.location.href = `/login?return_to=${encodeURIComponent(returnTo)}`;
+      let loginReturn = returnTo;
+      try {
+        const u = new URL(returnTo, window.location.origin);
+        loginReturn = `${u.pathname}${u.search}`;
+      } catch {
+        // keep returnTo as-is if it can't be parsed
+      }
+      window.location.href = `/login?return_to=${encodeURIComponent(loginReturn)}`;
       return;
     }
 
