@@ -271,7 +271,7 @@ export default function DashboardLayout({
         <div className={`border-r border-gray-200 ${sidebarOpen ? 'px-2 py-2' : 'px-1.5 py-2'}`}>
           <WorkspaceSwitcher collapsed={!sidebarOpen} />
         </div>
-        <nav className="py-2 pl-2 space-y-0.5 border-r border-gray-200 flex-1">
+        <nav className="py-2 px-2 space-y-0.5 border-r border-gray-200 flex-1">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -448,7 +448,7 @@ function SortableNavLink({
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
       <a
         href={href}
-        className={`flex items-center gap-4 px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
+        className={`flex items-center gap-4 px-2.5 py-1.5 rounded-lg text-sm font-medium transition-colors ${
           collapsed ? 'justify-center' : ''
         } ${
           isActive
