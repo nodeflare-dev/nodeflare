@@ -93,49 +93,16 @@ export function OAuthHandler() {
         return;
       }
 
-      // Signed in — clear the loop guard and finish the flow.
+      // Signed in — clear the loop guard and go to the destination. We never auto-issue an
+      // authorization code here: the /oauth/consent screen performs the actual authorization
+      // only after the user explicitly approves the client.
       sessionStorage.removeItem(LOGIN_TRIED_KEY);
-      try {
-        const url = new URL(returnTo, window.location.origin);
-
-        // nodeflare acting as an OAuth provider (e.g. Claude connecting to an MCP server):
-        // exchange the session for an authorization code and bounce to the client.
-        if (url.pathname === '/oauth/authorize') {
-          const response = await fetch('/api/v1/oauth/authorize-code', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              response_type: url.searchParams.get('response_type'),
-              client_id: url.searchParams.get('client_id'),
-              redirect_uri: url.searchParams.get('redirect_uri'),
-              code_challenge: url.searchParams.get('code_challenge'),
-              code_challenge_method: url.searchParams.get('code_challenge_method') || 'S256',
-              state: url.searchParams.get('state') || '',
-              scope: url.searchParams.get('scope') || '*',
-            }),
-          });
-          if (cancelled) return;
-          if (response.ok) {
-            const data = await response.json();
-            const redirectUri = url.searchParams.get('redirect_uri');
-            const clientState = url.searchParams.get('state') || '';
-            if (redirectUri) {
-              const separator = redirectUri.includes('?') ? '&' : '?';
-              window.location.href = `${redirectUri}${separator}code=${data.code}&state=${clientState}`;
-              return;
-            }
-          }
-          // Authorization failed — fall back to the dashboard rather than hang.
-          window.location.href = '/dashboard';
-          return;
-        }
-
-        // Ordinary deep-link return: only follow safe same-site relative paths.
-        window.location.href = isSafeRelativePath(returnTo) ? returnTo : '/dashboard';
-      } catch {
-        if (!cancelled) window.location.href = '/dashboard';
+      let dest = toRelative(returnTo);
+      // A raw /oauth/authorize return_to (legacy/edge) routes to the consent screen.
+      if (dest.startsWith('/oauth/authorize')) {
+        dest = '/oauth/consent' + dest.slice('/oauth/authorize'.length);
       }
+      window.location.href = isSafeRelativePath(dest) ? dest : '/dashboard';
     })();
 
     return () => {

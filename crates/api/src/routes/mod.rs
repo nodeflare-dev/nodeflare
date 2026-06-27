@@ -287,6 +287,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
             post(oauth::regenerate_server_oauth_secret),
         )
         // OAuth Authorization Code (called from frontend for logged-in users)
+        .route("/oauth/client-info", get(oauth::client_info))
         .route("/oauth/authorize-code", post(oauth::authorize_code))
 }
 

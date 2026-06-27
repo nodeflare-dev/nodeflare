@@ -600,14 +600,14 @@ pub struct AuthorizeRequest {
 /// GET /oauth/authorize
 pub async fn authorize(
     State(state): State<Arc<AppState>>,
-    auth_user: Option<AuthUser>,
+    _auth_user: Option<AuthUser>,
     Query(params): Query<AuthorizeRequest>,
 ) -> Result<Response, (StatusCode, String)> {
     tracing::info!(
         "OAuth authorize request: client_id={}, redirect_uri={}, user_present={}",
         params.client_id,
         params.redirect_uri,
-        auth_user.is_some()
+        _auth_user.is_some()
     );
 
     // Validate response_type
@@ -638,104 +638,22 @@ pub async fn authorize(
         return Err((StatusCode::BAD_REQUEST, "invalid_redirect_uri".to_string()));
     }
 
-    // If user is not logged in, redirect to login with return URL
-    let user = match auth_user {
-        Some(u) => {
-            tracing::info!("OAuth authorize: user {} is logged in", u.user_id);
-            u
-        }
-        None => {
-            // Build return URL with all OAuth params (must be absolute URL to API server)
-            let api_url = std::env::var("API_URL").unwrap_or_else(|_| {
-                format!("http://{}:{}", state.config.server.host, state.config.server.port)
-            });
-            let return_url = format!(
-                "{}/oauth/authorize?response_type={}&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method={}&state={}",
-                api_url,
-                params.response_type,
-                params.client_id,
-                urlencoding::encode(&params.redirect_uri),
-                params.code_challenge,
-                method,
-                params.state.as_deref().unwrap_or("")
-            );
-            let login_url = format!(
-                "{}/?return_to={}",
-                state.config.server.frontend_url,
-                urlencoding::encode(&return_url)
-            );
-            tracing::info!("OAuth authorize: redirecting to login: {}", login_url);
-            return Ok(Redirect::temporary(&login_url).into_response());
-        }
-    };
-
-    // Generate authorization code
-    let code = generate_token(32);
-    let code_hash = ApiKeyService::hash_key(&code);
-
-    let requested_scopes: Vec<String> = params
-        .scope
-        .as_deref()
-        .unwrap_or("*")
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
-
-    // SECURITY: Validate requested scopes against client's allowed scopes
-    let client_scopes = client.scopes();
-    let has_wildcard = client_scopes.contains(&"*".to_string());
-
-    if !has_wildcard {
-        for scope in &requested_scopes {
-            if scope != "*" && !client_scopes.contains(scope) {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!("Scope '{}' is not authorized for this client", scope),
-                ));
-            }
-        }
-    }
-
-    // Use validated scopes (or client's scopes if wildcard requested)
-    let scopes = if requested_scopes.contains(&"*".to_string()) && !has_wildcard {
-        client_scopes // Use client's actual scopes instead of wildcard
-    } else {
-        requested_scopes
-    };
-
-    let auth_code = CreateOAuthAuthorizationCode {
-        code_hash,
-        client_id: client.id,
-        user_id: user.user_id,
-        redirect_uri: params.redirect_uri.clone(),
-        scopes,
-        code_challenge: params.code_challenge.clone(),
-        code_challenge_method: method.to_string(),
-        expires_at: Utc::now() + Duration::minutes(AUTH_CODE_EXPIRES_MINUTES),
-    };
-
-    OAuthAuthorizationCodeRepository::create(&state.db, auth_code)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    // Redirect back to client with authorization code
-    let redirect_url = if params.redirect_uri.contains('?') {
-        format!(
-            "{}&code={}&state={}",
-            params.redirect_uri,
-            code,
-            params.state.as_deref().unwrap_or("")
-        )
-    } else {
-        format!(
-            "{}?code={}&state={}",
-            params.redirect_uri,
-            code,
-            params.state.as_deref().unwrap_or("")
-        )
-    };
-
-    Ok(Redirect::temporary(&redirect_url).into_response())
+    // Do NOT auto-issue a code. Redirect to the consent screen, which (after login if
+    // needed) requires the user to explicitly approve this client before any authorization
+    // code is issued. This is what prevents a malicious registered client from silently
+    // obtaining a token for a logged-in victim via a cross-site navigation.
+    let consent_url = format!(
+        "{}/oauth/consent?response_type={}&client_id={}&redirect_uri={}&code_challenge={}&code_challenge_method={}&state={}&scope={}",
+        state.config.server.frontend_url,
+        urlencoding::encode(&params.response_type),
+        urlencoding::encode(&params.client_id),
+        urlencoding::encode(&params.redirect_uri),
+        urlencoding::encode(&params.code_challenge),
+        urlencoding::encode(method),
+        urlencoding::encode(params.state.as_deref().unwrap_or("")),
+        urlencoding::encode(params.scope.as_deref().unwrap_or("")),
+    );
+    Ok(Redirect::temporary(&consent_url).into_response())
 }
 
 /// Token Request
@@ -1105,6 +1023,36 @@ fn default_scope() -> String {
 #[derive(Debug, Serialize)]
 pub struct AuthorizeCodeResponse {
     pub code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClientInfoQuery {
+    pub client_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClientInfoResponse {
+    pub client_id: String,
+    pub client_name: String,
+    pub scopes: Vec<String>,
+}
+
+/// Public, non-secret client info for the consent screen (app name + requested scopes).
+/// GET /api/v1/oauth/client-info?client_id=...
+pub async fn client_info(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<ClientInfoQuery>,
+) -> Result<Json<ClientInfoResponse>, (StatusCode, String)> {
+    let client = OAuthClientRepository::find_by_client_id(&state.db, &q.client_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "invalid_client".to_string()))?;
+    let scopes = client.scopes();
+    Ok(Json(ClientInfoResponse {
+        client_id: client.client_id,
+        client_name: client.client_name,
+        scopes,
+    }))
 }
 
 /// Generate authorization code for logged-in user (called from frontend)
