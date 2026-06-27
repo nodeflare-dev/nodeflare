@@ -5,6 +5,7 @@ import { useTranslations, useLocale } from 'next-intl';
 import { AlertCircle, AlertTriangle, FileText, Search, Pause, Play, RefreshCw, Download } from 'lucide-react';
 import { api } from '@/lib/api';
 import { RequestLog, PaginatedResponse, McpServerBasic } from '@/types';
+import { useWorkspace } from '@/hooks/use-workspace';
 import { useState, useMemo, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { jsPDF } from 'jspdf';
@@ -33,9 +34,12 @@ export default function LogsPage() {
   const [timeFilter] = useState<TimeFilter>('all');
   const [isLive, setIsLive] = useState(true);
 
+  const { activeWorkspace } = useWorkspace();
+
   const { data: servers, isLoading: isLoadingServers, isError: isErrorServers } = useQuery<McpServerBasic[]>({
-    queryKey: ['servers-basic'],
-    queryFn: () => api.get('/servers/basic'),
+    queryKey: ['servers-basic', activeWorkspace?.id],
+    queryFn: () => api.get(`/workspaces/${activeWorkspace!.id}/servers/basic`),
+    enabled: !!activeWorkspace,
   });
 
   const selectedServer = servers?.find((s) => s.id === selectedServerId)

@@ -50,6 +50,8 @@ fn check_memory_choice(
     }
 }
 
+/// List servers in a workspace with minimal fields (id, workspace_id, name only)
+/// Use this for selection lists to reduce payload size
 /// List all servers across all workspaces the user has access to
 pub async fn list_all(
     State(state): State<Arc<AppState>>,
@@ -152,6 +154,93 @@ pub async fn list_all_list(
     auth_user: AuthUser,
 ) -> Result<Json<Vec<ServerListResponse>>, AppError> {
     let servers = ServerRepository::list_all_by_user(&state.db, auth_user.user_id)
+        .await?;
+
+    let response: Vec<ServerListResponse> = servers
+        .into_iter()
+        .map(|s| {
+            let runtime = s.runtime();
+            let visibility = s.visibility();
+            let status = s.status();
+            ServerListResponse {
+                id: s.id,
+                workspace_id: s.workspace_id,
+                name: s.name,
+                slug: s.slug,
+                runtime,
+                visibility,
+                status,
+                github_repo: s.github_repo,
+                endpoint_url: s.endpoint_url,
+            }
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+pub async fn list_minimal(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<Vec<ServerMinimalResponse>>, AppError> {
+    workspace::require_member(&state.db, workspace_id, auth_user.user_id).await?;
+
+    let servers = ServerRepository::list_by_workspace(&state.db, workspace_id, 1000, 0)
+        .await?;
+
+    let response: Vec<ServerMinimalResponse> = servers
+        .into_iter()
+        .map(|s| ServerMinimalResponse {
+            id: s.id,
+            workspace_id: s.workspace_id,
+            name: s.name,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+/// List servers in a workspace with basic fields (id, workspace_id, name, status, runtime)
+/// Use this for dashboard overview and logs page
+pub async fn list_basic(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<Vec<ServerBasicResponse>>, AppError> {
+    workspace::require_member(&state.db, workspace_id, auth_user.user_id).await?;
+
+    let servers = ServerRepository::list_by_workspace(&state.db, workspace_id, 1000, 0)
+        .await?;
+
+    let response: Vec<ServerBasicResponse> = servers
+        .into_iter()
+        .map(|s| {
+            let status = s.status();
+            let runtime = s.runtime();
+            ServerBasicResponse {
+                id: s.id,
+                workspace_id: s.workspace_id,
+                name: s.name,
+                status,
+                runtime,
+            }
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+/// List servers in a workspace with list-display fields
+/// Use this for server list page
+pub async fn list_summary(
+    State(state): State<Arc<AppState>>,
+    auth_user: AuthUser,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<Json<Vec<ServerListResponse>>, AppError> {
+    workspace::require_member(&state.db, workspace_id, auth_user.user_id).await?;
+
+    let servers = ServerRepository::list_by_workspace(&state.db, workspace_id, 1000, 0)
         .await?;
 
     let response: Vec<ServerListResponse> = servers

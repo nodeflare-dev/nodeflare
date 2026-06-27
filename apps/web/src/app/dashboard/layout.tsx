@@ -29,7 +29,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { PageHeaderProvider, DashboardHeaderTitle } from './page-header';
-import { WorkspaceProvider } from '@/hooks/use-workspace';
+import { WorkspaceProvider, useWorkspace } from '@/hooks/use-workspace';
 import { WorkspaceSwitcher } from '@/components/workspace/workspace-switcher';
 
 interface NavItem {
@@ -55,8 +55,23 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  return (
+    <PageHeaderProvider>
+      <WorkspaceProvider>
+        <DashboardShell>{children}</DashboardShell>
+      </WorkspaceProvider>
+    </PageHeaderProvider>
+  );
+}
+
+function DashboardShell({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const t = useTranslations('nav');
   const { user, isLoading, logout } = useAuth();
+  const { activeWorkspace } = useWorkspace();
   const router = useRouter();
   const pathname = usePathname();
   const queryClient = useQueryClient();
@@ -71,9 +86,9 @@ export default function DashboardLayout({
   }, [pathname]);
 
   const { data: servers, isLoading: serversLoading } = useQuery<McpServerMinimal[]>({
-    queryKey: ['servers-minimal'],
-    queryFn: () => api.get('/servers/minimal'),
-    enabled: !!user,
+    queryKey: ['servers-minimal', activeWorkspace?.id],
+    queryFn: () => api.get(`/workspaces/${activeWorkspace!.id}/servers/minimal`),
+    enabled: !!user && !!activeWorkspace,
   });
 
   const { data: preferences } = useQuery<{ sidebar_order: string[] }>({
@@ -237,8 +252,6 @@ export default function DashboardLayout({
   }
 
   return (
-    <PageHeaderProvider>
-    <WorkspaceProvider>
     <div className="h-screen flex overflow-hidden">
       {/* Mobile menu backdrop */}
       {mobileMenuOpen && (
@@ -394,8 +407,6 @@ export default function DashboardLayout({
         <main className="flex-1 p-4 md:p-6 bg-card overflow-y-auto overflow-x-hidden">{children}</main>
       </div>
     </div>
-    </WorkspaceProvider>
-    </PageHeaderProvider>
   );
 }
 
