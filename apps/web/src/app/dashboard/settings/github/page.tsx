@@ -8,6 +8,17 @@ import { Github, Plus, Trash2, Star, ExternalLink, Check, AlertCircle, ChevronLe
 import { SiGithub } from 'react-icons/si';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '@/components/ui/alert-dialog';
 import { getLinkedAccounts, unlinkAccount, setPrimaryAccount, getLinkUrl, LinkedGitHubAccount } from '@/lib/github-api';
 import { useSetPageHeader } from '../../page-header';
 
@@ -159,18 +170,37 @@ export default function GitHubSettingsPage() {
                 >
                   <ExternalLink className="w-4 h-4" />
                 </a>
-                <button
-                  onClick={() => {
-                    if (confirm(t('confirmUnlink', { username: account.github_username }))) {
-                      unlinkMutation.mutate(account.id);
-                    }
-                  }}
-                  disabled={unlinkMutation.isPending}
-                  className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                  title={t('unlink')}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <button
+                      disabled={unlinkMutation.isPending}
+                      className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                      title={t('unlink')}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent className="max-w-[calc(100%-2rem)] sm:max-w-md mx-4 sm:mx-auto">
+                    <AlertDialogHeader className="space-y-4">
+                      <AlertDialogTitle className="flex items-center justify-center gap-2 text-gray-400">
+                        <AlertCircle className="w-5 h-5 text-red-500" />
+                        {t('unlink')}
+                      </AlertDialogTitle>
+                      <AlertDialogDescription className="text-center space-y-3">
+                        <p>{t('confirmUnlink', { username: account.github_username })}</p>
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel className="flex-1">{tCommon('cancel')}</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={() => unlinkMutation.mutate(account.id)}
+                        className="flex-1 bg-red-600 hover:bg-red-700"
+                      >
+                        {t('unlink')}
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </div>
             </div>
           ))}
