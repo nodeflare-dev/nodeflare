@@ -53,6 +53,15 @@ pub async fn list_plans() -> Json<Vec<PlanResponse>> {
 }
 
 /// Get current subscription status for a workspace
+/// Stripe replies 400 "No such customer" / resource_missing when a workspace's stored
+/// stripe_customer_id doesn't exist in the current account — e.g. a plan set manually in
+/// the DB, a stale id, or one from a different Stripe account. Treat that as "no billing
+/// data" so the billing page still loads instead of 500-ing.
+fn is_missing_stripe_resource<E: std::fmt::Display>(error: &E) -> bool {
+    let s = error.to_string().to_lowercase();
+    s.contains("no such customer") || s.contains("resource_missing")
+}
+
 pub async fn get_subscription(
     State(state): State<Arc<AppState>>,
     auth_user: AuthUser,
@@ -802,10 +811,12 @@ pub async fn list_invoices(
         return Ok(Json(vec![]));
     };
 
-    let invoices = billing
-        .list_invoices(&customer_id, 100)
-        .await
-        .map_err(db_error)?;
+    let invoices = match billing.list_invoices(&customer_id, 100).await {
+        Ok(v) => v,
+        // Unknown/stale customer → no invoices, not a hard error.
+        Err(e) if is_missing_stripe_resource(&e) => return Ok(Json(vec![])),
+        Err(e) => return Err(db_error(e)),
+    };
 
     let response: Vec<InvoiceResponse> = invoices
         .into_iter()
@@ -863,10 +874,17 @@ pub async fn list_subscription_history(
         return Ok(Json(vec![]));
     };
 
-    let subscriptions = billing
-        .list_subscriptions(&customer_id)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to list subscriptions: {}", e)))?;
+    let subscriptions = match billing.list_subscriptions(&customer_id).await {
+        Ok(v) => v,
+        // Unknown/stale customer → no subscription history, not a hard error.
+        Err(e) if is_missing_stripe_resource(&e) => return Ok(Json(vec![])),
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to list subscriptions: {}", e),
+            ))
+        }
+    };
 
     let response: Vec<SubscriptionHistoryItem> = subscriptions
         .into_iter()
