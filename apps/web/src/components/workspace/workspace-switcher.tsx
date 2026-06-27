@@ -28,6 +28,40 @@ function initials(name: string): string {
   return name.trim().charAt(0).toUpperCase() || 'W';
 }
 
+// Deterministic hue from a seed so every workspace gets its own stable color.
+function hashHue(seed: string): number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
+  return h;
+}
+
+// Round, gradient avatar — a small identicon-style mark per workspace.
+function WorkspaceAvatar({
+  name,
+  seed,
+  size = 'md',
+  active = false,
+}: {
+  name: string;
+  seed: string;
+  size?: 'md' | 'lg';
+  active?: boolean;
+}) {
+  const h1 = hashHue(seed || name);
+  const h2 = (h1 + 38) % 360;
+  const dim = size === 'lg' ? 'h-8 w-8 text-sm' : 'h-6 w-6 text-[11px]';
+  return (
+    <span
+      className={`relative flex ${dim} shrink-0 items-center justify-center rounded-full font-semibold text-white shadow-sm ring-1 ring-black/5 ${
+        active ? 'ring-2 ring-offset-1 ring-violet-400/70' : ''
+      }`}
+      style={{ backgroundImage: `linear-gradient(135deg, hsl(${h1} 72% 56%), hsl(${h2} 78% 44%))` }}
+    >
+      <span className="drop-shadow-[0_1px_1px_rgba(0,0,0,0.25)]">{initials(name)}</span>
+    </span>
+  );
+}
+
 // Derive a url-safe slug from a free-text name.
 function slugify(value: string): string {
   return value
@@ -77,13 +111,18 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
         onClick={() => setOpen((v) => !v)}
         title={collapsed ? activeWorkspace.name : undefined}
         aria-label={t('label')}
-        className={`flex items-center gap-2 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors ${
-          collapsed ? 'w-9 h-9 justify-center p-0 mx-auto' : 'w-full px-2 py-1.5'
+        className={`group flex items-center transition-colors ${
+          collapsed
+            ? 'h-9 w-9 justify-center rounded-full p-0 mx-auto hover:bg-gray-100'
+            : 'w-full gap-2 rounded-xl border border-gray-200 px-2 py-1.5 hover:bg-gray-50 hover:border-gray-300'
         }`}
       >
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-violet-600 text-white text-xs font-semibold">
-          {initials(activeWorkspace.name)}
-        </span>
+        <WorkspaceAvatar
+          name={activeWorkspace.name}
+          seed={activeWorkspace.id}
+          size={collapsed ? 'lg' : 'md'}
+          active
+        />
         {!collapsed && (
           <>
             <span className="flex-1 min-w-0 text-left text-sm font-medium text-gray-800 truncate">
@@ -113,11 +152,9 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
                   if (ws.id !== activeWorkspaceId) setActiveWorkspaceId(ws.id);
                   setOpen(false);
                 }}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-gray-50 transition-colors"
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-gray-50 transition-colors"
               >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-violet-600 text-white text-xs font-semibold">
-                  {initials(ws.name)}
-                </span>
+                <WorkspaceAvatar name={ws.name} seed={ws.id} active={ws.id === activeWorkspaceId} />
                 <span className="flex-1 min-w-0">
                   <span className="flex items-center gap-1.5">
                     <span className="text-sm font-medium text-gray-800 truncate">{ws.name}</span>
@@ -138,9 +175,9 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
               setOpen(false);
               setShowCreate(true);
             }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            className="group flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
           >
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-dashed border-gray-300 text-gray-500">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-dashed border-gray-300 text-gray-500 group-hover:border-violet-400 group-hover:text-violet-500 transition-colors">
               <Plus className="w-3.5 h-3.5" />
             </span>
             {t('createTeam')}

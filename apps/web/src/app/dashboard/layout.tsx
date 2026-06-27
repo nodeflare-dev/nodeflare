@@ -448,11 +448,11 @@ function SortableNavLink({
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
       <a
         href={href}
-        className={`flex items-center gap-4 px-2.5 py-1.5 rounded-l-md text-sm font-medium transition-colors ${
+        className={`flex items-center gap-4 px-2.5 py-1.5 rounded-md text-sm font-medium transition-colors ${
           collapsed ? 'justify-center' : ''
         } ${
           isActive
-            ? 'bg-gray-100 text-foreground border-r border-violet-500 -mr-[1px]'
+            ? 'bg-gray-100 text-foreground'
             : 'hover:bg-gray-50 text-gray-500 hover:text-foreground'
         } ${isDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
         title={collapsed ? String(children) : undefined}
