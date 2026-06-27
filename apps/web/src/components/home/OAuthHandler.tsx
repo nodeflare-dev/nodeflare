@@ -63,14 +63,9 @@ export function OAuthHandler() {
   const returnTo = searchParams.get('return_to');
   const [failed, setFailed] = useState(false);
 
-  const isAuthorize = (() => {
-    if (!returnTo || typeof window === 'undefined') return false;
-    try {
-      return new URL(returnTo, window.location.origin).pathname === '/oauth/authorize';
-    } catch {
-      return false;
-    }
-  })();
+  // Render-safe (no window): just used to pick the overlay label. The actual routing in the
+  // effect parses the URL precisely.
+  const isAuthorize = !!returnTo && returnTo.includes('/oauth/authorize');
 
   useEffect(() => {
     if (!returnTo) return;
