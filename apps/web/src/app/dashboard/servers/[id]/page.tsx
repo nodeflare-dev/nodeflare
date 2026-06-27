@@ -118,8 +118,6 @@ export default function ServerDetailPage() {
 
   useSetPageHeader(server?.name ?? t('title'), <Boxes className="w-4 h-4" />);
 
-  useSetPageHeader(server?.name ?? t('title'), <Boxes className="w-4 h-4" />);
-
   // Fetch deployments separately to enable conditional polling during builds
   const deploymentsQuery = useQuery({
     queryKey: ['servers', serverId, 'deployments'],
@@ -1267,7 +1265,11 @@ function SettingsTab({
         auth_enabled: authEnabled,
         memory_mb: memoryMb,
       });
-      queryClient.invalidateQueries({ queryKey: ['servers'] });
+      // Refresh the list views (keyed with their own prefixes) and this server's detail.
+      queryClient.invalidateQueries({ queryKey: ['servers-list'] });
+      queryClient.invalidateQueries({ queryKey: ['servers-minimal'] });
+      queryClient.invalidateQueries({ queryKey: ['servers-basic'] });
+      queryClient.invalidateQueries({ queryKey: ['server', workspaceId, server.id] });
     } catch {
       // Error already handled by mutation
     } finally {
