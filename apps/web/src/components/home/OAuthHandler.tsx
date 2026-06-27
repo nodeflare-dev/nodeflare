@@ -72,6 +72,15 @@ export function OAuthHandler() {
     }
   })();
 
+  const isAuthorize = (() => {
+    if (!returnTo) return false;
+    try {
+      return new URL(returnTo, window.location.origin).pathname === '/oauth/authorize';
+    } catch {
+      return false;
+    }
+  })();
+
   useEffect(() => {
     if (!returnTo) return;
     let cancelled = false;
