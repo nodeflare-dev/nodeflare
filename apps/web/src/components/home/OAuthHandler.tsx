@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { useAuth } from '@/hooks/use-auth';
+import { SquareLoader } from '@/components/ui/square-loader';
 
 // Guard against bouncing between the landing page and /login forever if a session can't be
 // established. Stores a timestamp; only honored briefly so an abandoned flow can retry later.
@@ -48,9 +49,7 @@ function AuthorizingScreen({ message, showRetry }: { message: string; showRetry?
             Try signing in again
           </a>
         ) : (
-          <div className="mt-5 h-1.5 w-full overflow-hidden rounded-full bg-violet-100">
-            <div className="h-full w-2/5 rounded-full bg-gradient-to-r from-violet-400 via-violet-600 to-violet-400 animate-indeterminate" />
-          </div>
+          <SquareLoader className="mt-6" />
         )}
       </div>
     </div>

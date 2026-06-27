@@ -54,10 +54,16 @@ module.exports = {
           '0%': { transform: 'translateX(-100%)' },
           '100%': { transform: 'translateX(250%)' },
         },
+        // Square loader: each square brightens + scales in a staggered wave.
+        wave: {
+          '0%, 100%': { opacity: '0.3', transform: 'scale(0.82)' },
+          '50%': { opacity: '1', transform: 'scale(1.12)' },
+        },
       },
       animation: {
         flash: 'flash 1s ease-out',
         indeterminate: 'indeterminate 1.15s ease-in-out infinite',
+        wave: 'wave 1.1s ease-in-out infinite',
       },
       typography: {
         DEFAULT: {

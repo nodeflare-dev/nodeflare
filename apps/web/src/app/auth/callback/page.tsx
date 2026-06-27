@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useTranslations } from 'next-intl';
+import { SquareLoader } from '@/components/ui/square-loader';
 
 // SECURITY: Validate return_to URL to prevent open redirect attacks
 function isValidReturnTo(url: string): boolean {
@@ -35,15 +36,6 @@ function isValidReturnTo(url: string): boolean {
   }
 
   return true;
-}
-
-/** Indeterminate gradient progress bar: a violet segment sweeps left -> right, looping. */
-function IndeterminateBar() {
-  return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-violet-100">
-      <div className="h-full w-2/5 rounded-full bg-gradient-to-r from-violet-400 via-violet-600 to-violet-400 animate-indeterminate" />
-    </div>
-  );
 }
 
 /** NodeFlare wordmark. */
@@ -106,9 +98,7 @@ function AuthCallbackContent() {
       <div className="flex w-full max-w-[260px] flex-col items-center px-6">
         <BrandMark />
         <p className="mt-6 text-gray-700 font-medium">{t('signingIn')}</p>
-        <div className="mt-5 w-full">
-          <IndeterminateBar />
-        </div>
+        <SquareLoader className="mt-6" />
       </div>
     </div>
   );
@@ -121,9 +111,7 @@ function LoadingFallback() {
       <div className="flex w-full max-w-[260px] flex-col items-center px-6">
         <BrandMark />
         <p className="mt-6 text-gray-700 font-medium">Signing in…</p>
-        <div className="mt-5 w-full">
-          <IndeterminateBar />
-        </div>
+        <SquareLoader className="mt-6" />
       </div>
     </div>
   );
