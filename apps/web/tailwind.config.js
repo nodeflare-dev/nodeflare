@@ -49,9 +49,15 @@ module.exports = {
           '0%': { backgroundColor: 'rgb(16 185 129 / 0.2)' },
           '100%': { backgroundColor: 'transparent' },
         },
+        // Indeterminate progress: a gradient segment sweeps left -> right and repeats.
+        indeterminate: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(250%)' },
+        },
       },
       animation: {
         flash: 'flash 1s ease-out',
+        indeterminate: 'indeterminate 1.15s ease-in-out infinite',
       },
       typography: {
         DEFAULT: {
