@@ -69,8 +69,9 @@ export default function DashboardPage() {
   const [serversQuery, plansQuery] = useQueries({
     queries: [
       {
-        queryKey: ['servers-basic'],
-        queryFn: () => api.get<McpServerBasic[]>('/servers/basic'),
+        queryKey: ['servers-basic', activeWorkspace?.id],
+        queryFn: () => api.get<McpServerBasic[]>(`/workspaces/${activeWorkspace!.id}/servers/basic`),
+        enabled: !!activeWorkspace,
       },
       {
         queryKey: ['billing-plans'],

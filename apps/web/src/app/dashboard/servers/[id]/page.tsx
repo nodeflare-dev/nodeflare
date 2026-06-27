@@ -102,18 +102,21 @@ export default function ServerDetailPage() {
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const serversQuery = useQuery({
-    queryKey: ['servers'],
-    queryFn: () => api.get<McpServer[]>('/servers'),
+  const { activeWorkspace, workspaces, isLoading: isLoadingWorkspaces } = useWorkspace();
+
+  const serverQuery = useQuery({
+    queryKey: ['server', activeWorkspace?.id, serverId],
+    queryFn: () => api.get<McpServer>(`/workspaces/${activeWorkspace!.id}/servers/${serverId}`),
+    enabled: !!activeWorkspace && !!serverId,
   });
 
-  const { workspaces } = useWorkspace();
-  const servers = serversQuery.data;
-  const isLoadingServers = serversQuery.isLoading;
-  const isErrorServers = serversQuery.isError;
+  const server = serverQuery.data;
+  const isLoadingServers = serverQuery.isLoading || isLoadingWorkspaces;
+  const isErrorServers = serverQuery.isError;
 
-  const server = servers?.find((s) => s.id === serverId);
-  const workspaceId = server?.workspace_id;
+  const workspaceId = activeWorkspace?.id;
+
+  useSetPageHeader(server?.name ?? t('title'), <Boxes className="w-4 h-4" />);
 
   useSetPageHeader(server?.name ?? t('title'), <Boxes className="w-4 h-4" />);
 
@@ -185,14 +188,11 @@ export default function ServerDetailPage() {
         }
 
         // Update the server status in cache
-        queryClient.setQueryData<McpServer[]>(['servers'], (old) => {
-          if (!old) return old;
-          return old.map((s) =>
-            s.id === serverId
-              ? { ...s, status: status.status, endpoint_url: status.endpoint_url || s.endpoint_url }
-              : s
-          );
-        });
+        queryClient.setQueryData<McpServer>(['server', activeWorkspace?.id, serverId], (old) =>
+          old
+            ? { ...old, status: status.status, endpoint_url: status.endpoint_url || old.endpoint_url }
+            : old
+        );
       },
     }
   );
@@ -211,7 +211,7 @@ export default function ServerDetailPage() {
     },
     onSuccess: () => {
       setDeployError(null);
-      queryClient.invalidateQueries({ queryKey: ['servers'] });
+      queryClient.invalidateQueries({ queryKey: ['server', activeWorkspace?.id, serverId] });
       queryClient.invalidateQueries({ queryKey: ['servers', serverId, 'deployments'] });
       queryClient.invalidateQueries({ queryKey: ['workspaces', workspaceId, 'deployments', 'usage'] });
       // Toast will be updated by WebSocket when deployment completes
@@ -241,7 +241,7 @@ export default function ServerDetailPage() {
     },
   });
 
-  const SERVERS_LIST_KEY = ['servers-list'] as const;
+  const SERVERS_LIST_KEY = ['servers-list', activeWorkspace?.id] as const;
   const deleteMutation = useMutation({
     mutationFn: () => api.delete(`/workspaces/${workspaceId}/servers/${serverId}`),
     // Optimistic: drop the server from the list and navigate away immediately, so the

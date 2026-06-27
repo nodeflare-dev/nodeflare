@@ -27,8 +27,9 @@ export default function ServersPage() {
   const [serversQuery, plansQuery] = useQueries({
     queries: [
       {
-        queryKey: ['servers-list'],
-        queryFn: () => api.get<McpServerList[]>('/servers/list'),
+        queryKey: ['servers-list', activeWorkspace?.id],
+        queryFn: () => api.get<McpServerList[]>(`/workspaces/${activeWorkspace!.id}/servers/summary`),
+        enabled: !!activeWorkspace,
       },
       {
         queryKey: ['billing-plans'],

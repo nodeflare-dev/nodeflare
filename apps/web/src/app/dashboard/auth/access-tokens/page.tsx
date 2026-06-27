@@ -42,8 +42,9 @@ export default function AccessTokensPage() {
   });
 
   const { data: servers } = useQuery<McpServerMinimal[]>({
-    queryKey: ['servers-minimal'],
-    queryFn: () => api.get('/servers/minimal'),
+    queryKey: ['servers-minimal', workspaceId],
+    queryFn: () => api.get(`/workspaces/${workspaceId}/servers/minimal`),
+    enabled: !!workspaceId,
   });
 
   // Create a map for quick server name lookup
