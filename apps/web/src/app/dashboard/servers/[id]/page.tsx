@@ -118,6 +118,8 @@ export default function ServerDetailPage() {
 
   useSetPageHeader(server?.name ?? t('title'), <Boxes className="w-4 h-4" />);
 
+  useSetPageHeader(server?.name ?? t('title'), <Boxes className="w-4 h-4" />);
+
   // Fetch deployments separately to enable conditional polling during builds
   const deploymentsQuery = useQuery({
     queryKey: ['servers', serverId, 'deployments'],
