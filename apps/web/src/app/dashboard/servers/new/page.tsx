@@ -553,6 +553,29 @@ export default function NewServerPage() {
                   </div>
                 </div>
 
+                {formData.transport === 'sse' && (
+                  <div>
+                    <Label htmlFor="port" className="text-gray-700">{t('create.port')}</Label>
+                    <p className="text-xs text-gray-500 mt-1 mb-2">{t('create.portHelp')}</p>
+                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white">
+                      <Server className="w-4 h-4 text-gray-400" />
+                      <input
+                        id="port"
+                        type="number"
+                        min={1}
+                        max={65535}
+                        placeholder={String(formData.runtime === 'python' ? 8000 : (formData.runtime === 'go' || formData.runtime === 'rust') ? 8080 : 3000)}
+                        value={formData.port ?? ''}
+                        onChange={(e) => setFormData(prev => ({
+                          ...prev,
+                          port: e.target.value === '' ? undefined : Number(e.target.value),
+                        }))}
+                        className="flex-1 bg-transparent text-sm focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <Label htmlFor="entry_command" className="text-gray-700">{t('create.entryCommand')}</Label>
                   <p className="text-xs text-gray-500 mt-1 mb-2">{t('create.entryCommandHelp')}</p>
@@ -663,7 +686,7 @@ export default function NewServerPage() {
             </button>
             <button
               type="button"
-              onClick={() => setFormData(prev => ({ ...prev, transport: 'stdio' }))}
+              onClick={() => setFormData(prev => ({ ...prev, transport: 'stdio', port: undefined }))}
               className={`relative flex items-center gap-3 p-4 rounded-xl transition-all text-left ${
                 formData.transport === 'stdio'
                   ? 'bg-violet-50 border border-violet-200 shadow-sm'

@@ -14,7 +14,7 @@ impl ServerRepository {
             r#"
             SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
                    github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
-                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, fly_app_name, created_at, updated_at
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, port, fly_app_name, created_at, updated_at
             FROM mcp_servers
             WHERE id = $1
             "#,
@@ -35,7 +35,7 @@ impl ServerRepository {
             r#"
             SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
                    github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
-                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, fly_app_name, created_at, updated_at
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, port, fly_app_name, created_at, updated_at
             FROM mcp_servers
             WHERE workspace_id = $1 AND slug = $2
             "#,
@@ -54,7 +54,7 @@ impl ServerRepository {
             r#"
             SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
                    github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
-                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, fly_app_name, created_at, updated_at
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, port, fly_app_name, created_at, updated_at
             FROM mcp_servers
             WHERE slug = $1 AND status = 'running'
             "#,
@@ -76,7 +76,7 @@ impl ServerRepository {
             r#"
             SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
                    github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
-                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, fly_app_name, created_at, updated_at
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, port, fly_app_name, created_at, updated_at
             FROM mcp_servers
             WHERE workspace_id = $1
             ORDER BY created_at DESC
@@ -99,7 +99,7 @@ impl ServerRepository {
             r#"
             SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
                    github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
-                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, fly_app_name, created_at, updated_at
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, port, fly_app_name, created_at, updated_at
             FROM mcp_servers
             WHERE status = 'running'
             LIMIT 5000
@@ -149,12 +149,12 @@ impl ServerRepository {
             r#"
             INSERT INTO mcp_servers (
                 workspace_id, name, slug, description, github_repo, github_branch,
-                github_installation_id, runtime, visibility, access_mode, transport, region, root_directory, mcp_path, entry_command, auth_enabled, build_command, memory_mb, id, fly_app_name
+                github_installation_id, runtime, visibility, access_mode, transport, region, root_directory, mcp_path, entry_command, auth_enabled, build_command, memory_mb, id, fly_app_name, port
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
             RETURNING id, workspace_id, name, slug, description, github_repo, github_branch,
                       github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
-                      rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, fly_app_name, created_at, updated_at
+                      rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, port, fly_app_name, created_at, updated_at
             "#,
         )
         .bind(data.workspace_id)
@@ -177,6 +177,7 @@ impl ServerRepository {
         .bind(data.memory_mb)
         .bind(id)
         .bind(&fly_app_name)
+        .bind(data.port)
         .fetch_one(pool)
         .await?;
 
@@ -223,11 +224,12 @@ impl ServerRepository {
                 auth_enabled = COALESCE($13, auth_enabled),
                 build_command = COALESCE($14, build_command),
                 memory_mb = COALESCE($15, memory_mb),
+                port = COALESCE($16, port),
                 updated_at = NOW()
             WHERE id = $1
             RETURNING id, workspace_id, name, slug, description, github_repo, github_branch,
                       github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
-                      rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, fly_app_name, created_at, updated_at
+                      rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, port, fly_app_name, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -245,6 +247,7 @@ impl ServerRepository {
         .bind(data.auth_enabled)
         .bind(&data.build_command)
         .bind(data.memory_mb)
+        .bind(data.port)
         .fetch_one(pool)
         .await?;
 
@@ -289,7 +292,7 @@ impl ServerRepository {
             r#"
             SELECT id, workspace_id, name, slug, description, github_repo, github_branch,
                    github_installation_id, runtime, visibility, access_mode, transport, status, endpoint_url,
-                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, fly_app_name, created_at, updated_at
+                   rate_limit_per_minute, region, root_directory, mcp_path, entry_command, build_command, auth_enabled, memory_mb, port, fly_app_name, created_at, updated_at
             FROM mcp_servers
             WHERE status = 'deleting'
               AND updated_at < NOW() - ($1 * interval '1 minute')
@@ -358,7 +361,7 @@ impl ServerRepository {
                 s.id, s.workspace_id, s.name, s.slug, s.description,
                 s.github_repo, s.github_branch, s.github_installation_id,
                 s.runtime, s.visibility, s.access_mode, s.transport, s.status, s.endpoint_url,
-                s.rate_limit_per_minute, s.region, s.root_directory, s.mcp_path, s.entry_command, s.build_command, s.auth_enabled, s.memory_mb, s.fly_app_name, s.created_at, s.updated_at
+                s.rate_limit_per_minute, s.region, s.root_directory, s.mcp_path, s.entry_command, s.build_command, s.auth_enabled, s.memory_mb, s.port, s.fly_app_name, s.created_at, s.updated_at
             FROM mcp_servers s
             INNER JOIN workspace_members wm ON s.workspace_id = wm.workspace_id
             WHERE wm.user_id = $1

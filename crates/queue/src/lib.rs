@@ -36,6 +36,9 @@ pub struct BuildJob {
     /// User-selected machine memory in MB (256/512/1024/2048). None = auto (builder default).
     /// The builder still raises this to the detection floor and clamps it to the plan ceiling.
     pub memory_mb: Option<i32>,
+    /// Internal listening port for Streamable HTTP (SSE) servers. None = runtime default.
+    /// Ignored for stdio transport (the adapter always owns its own port).
+    pub port: Option<i32>,
 }
 
 impl BuildJob {
@@ -63,6 +66,7 @@ impl BuildJob {
             entry_command: server.entry_command.clone(),
             build_command: server.build_command.clone(),
             memory_mb: server.memory_mb,
+            port: server.port,
         }
     }
 }

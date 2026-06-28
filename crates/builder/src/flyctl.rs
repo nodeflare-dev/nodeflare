@@ -707,17 +707,24 @@ pub struct DeployResult {
 }
 
 /// Generate fly.toml content for a server
-fn generate_fly_toml(app_name: &str, region: &str, runtime: &str, transport: &str, memory_mb: u64) -> String {
-    // For STDIO transport, always use the STDIO adapter's port.
+fn generate_fly_toml(app_name: &str, region: &str, runtime: &str, transport: &str, memory_mb: u64, port: Option<i32>) -> String {
+    // For STDIO transport, always use the STDIO adapter's port (the user's port choice,
+    // if any, applies only to native HTTP/SSE servers and is ignored here).
     let internal_port = if transport == "stdio" {
         STDIO_PORT
     } else {
-        match runtime {
-            "node" => NODE_PORT,
-            "python" => PYTHON_PORT,
-            "go" | "rust" => GO_RUST_PORT,
-            _ => NODE_PORT,
-        }
+        // A user-supplied port (e.g. an existing HTTP server that hardcodes its own port
+        // instead of reading $PORT) wins; otherwise fall back to the runtime default.
+        // fly.toml sets BOTH `internal_port` and `[env] PORT` to this value, so servers
+        // that read $PORT and servers that hardcode the same port both work.
+        port.and_then(|p| u16::try_from(p).ok())
+            .filter(|p| *p > 0)
+            .unwrap_or(match runtime {
+                "node" => NODE_PORT,
+                "python" => PYTHON_PORT,
+                "go" | "rust" => GO_RUST_PORT,
+                _ => NODE_PORT,
+            })
     };
 
     format!(
@@ -2078,7 +2085,7 @@ pub async fn build_and_deploy(
         memory_mb, requested_mb, floor_mb, plan_memory_ceiling_mb
     ));
     let fly_toml_content =
-        generate_fly_toml(&app_name, &job.region, &job.runtime, &job.transport, memory_mb);
+        generate_fly_toml(&app_name, &job.region, &job.runtime, &job.transport, memory_mb, job.port);
     tokio::fs::write(&fly_toml_path, &fly_toml_content)
         .await
         .context("Failed to write fly.toml")?;

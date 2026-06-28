@@ -345,6 +345,8 @@
       "mcpPath": "MCP Endpoint Path",
       "mcpPathHelp": "HTTP path where the MCP server listens (e.g., /mcp, /sse, /)",
       "mcpPathAutoStdio": "Automatically set to /mcp for STDIO transport",
+      "port": "Listening Port",
+      "portHelp": "Internal port your HTTP server listens on. Leave empty to use the runtime default (read from the PORT env var). Set this only if your server hardcodes a different port.",
       "entryCommand": "Entry Command",
       "entryCommandHelp": "Custom command to start the server (e.g., python server.py, uv run mcp-server). If empty, auto-detected based on project structure.",
       "buildCommand": "Build Command",

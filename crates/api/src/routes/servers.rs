@@ -90,6 +90,7 @@ pub async fn list_all(
                 build_command: s.build_command,
                 auth_enabled: s.auth_enabled,
                 memory_mb: s.memory_mb,
+                port: s.port,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             }
@@ -312,6 +313,7 @@ pub async fn list(
                 build_command: s.build_command,
                 auth_enabled: s.auth_enabled,
                 memory_mb: s.memory_mb,
+                port: s.port,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             }
@@ -513,6 +515,7 @@ pub async fn create(
             build_command: body.build_command.clone(),
             auth_enabled: body.auth_enabled.unwrap_or(true),
             memory_mb: body.memory_mb,
+            port: body.port,
         },
     )
     .await
@@ -705,6 +708,7 @@ pub async fn create(
         build_command: server.build_command,
         auth_enabled: server.auth_enabled,
         memory_mb: server.memory_mb,
+        port: server.port,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -752,6 +756,7 @@ pub async fn get(
         build_command: server.build_command,
         auth_enabled: server.auth_enabled,
         memory_mb: server.memory_mb,
+        port: server.port,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -765,6 +770,26 @@ pub async fn update(
 ) -> Result<Json<ServerResponse>, AppError> {
     // Check membership and write permission
     workspace::require_write_access(&state.db, path.workspace_id, auth_user.user_id).await?;
+
+    // SECURITY: Validate input (e.g. port range) using the validator crate.
+    use validator::Validate;
+    if let Err(validation_errors) = body.validate() {
+        let error_messages: Vec<String> = validation_errors
+            .field_errors()
+            .iter()
+            .flat_map(|(field, errors)| {
+                errors.iter().map(move |e| {
+                    format!("{}: {}", field, e.message.as_ref().map(|m| m.to_string()).unwrap_or_else(|| e.code.to_string()))
+                })
+            })
+            .collect();
+        return Err(AppError::bad_request(
+            "VALIDATION_ERROR",
+            &error_messages.join(", "),
+        ).with_details(json!({
+            "errors": error_messages
+        })));
+    }
 
     // Verify server belongs to this workspace
     let existing = ServerRepository::find_by_id(&state.db, path.server_id)
@@ -817,6 +842,7 @@ pub async fn update(
             build_command: body.build_command,
             auth_enabled: body.auth_enabled,
             memory_mb: body.memory_mb,
+            port: body.port,
         },
     )
     .await?;
@@ -847,6 +873,7 @@ pub async fn update(
         build_command: server.build_command,
         auth_enabled: server.auth_enabled,
         memory_mb: server.memory_mb,
+        port: server.port,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -1147,6 +1174,7 @@ pub async fn stop(
         build_command: server.build_command,
         auth_enabled: server.auth_enabled,
         memory_mb: server.memory_mb,
+        port: server.port,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
