@@ -34,6 +34,9 @@ pub struct McpServer {
     pub auth_enabled: bool,
     /// User-selected machine memory in MB (256/512/1024/2048). None = auto (builder default).
     pub memory_mb: Option<i32>,
+    /// Internal listening port for Streamable HTTP (SSE) servers. None = runtime default
+    /// (node 3000, python 8000, go/rust 8080). Ignored for stdio (adapter owns the port).
+    pub port: Option<i32>,
     /// Fly.io app name this server deploys to. Decided ONCE at creation and persisted so
     /// it is never recomputed from a truncated UUID prefix (which collided across tenants).
     pub fly_app_name: String,
@@ -119,6 +122,7 @@ pub struct CreateServer {
     pub build_command: Option<String>,
     pub auth_enabled: bool,
     pub memory_mb: Option<i32>,
+    pub port: Option<i32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -137,4 +141,5 @@ pub struct UpdateServer {
     pub build_command: Option<String>,
     pub auth_enabled: Option<bool>,
     pub memory_mb: Option<i32>,
+    pub port: Option<i32>,
 }

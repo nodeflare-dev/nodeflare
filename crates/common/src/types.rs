@@ -529,6 +529,10 @@ pub struct CreateServerRequest {
     /// User-selected machine memory in MB (256/512/1024/2048). None = auto.
     /// Validated against the workspace plan's ceiling at the API layer.
     pub memory_mb: Option<i32>,
+    /// Internal listening port for Streamable HTTP (SSE) servers. None = runtime default
+    /// (node 3000, python 8000, go/rust 8080). Ignored for stdio transport.
+    #[validate(range(min = 1, max = 65535))]
+    pub port: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -554,6 +558,9 @@ pub struct UpdateServerRequest {
     pub auth_enabled: Option<bool>,
     /// User-selected machine memory in MB (256/512/1024/2048). None = leave unchanged.
     pub memory_mb: Option<i32>,
+    /// Internal listening port for Streamable HTTP (SSE) servers. None = leave unchanged.
+    #[validate(range(min = 1, max = 65535))]
+    pub port: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -628,6 +635,8 @@ pub struct ServerResponse {
     pub auth_enabled: bool,
     /// User-selected machine memory in MB (None = auto).
     pub memory_mb: Option<i32>,
+    /// Internal listening port for Streamable HTTP (SSE) servers (None = runtime default).
+    pub port: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

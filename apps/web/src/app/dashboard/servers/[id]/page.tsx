@@ -1238,6 +1238,7 @@ function SettingsTab({
   const [buildCommand, setBuildCommand] = useState(server.build_command || '');
   const [authEnabled, setAuthEnabled] = useState(server.auth_enabled ?? true);
   const [memoryMb, setMemoryMb] = useState(server.memory_mb ?? DEFAULT_MEMORY_MB);
+  const [port, setPort] = useState<number | ''>(server.port ?? '');
   const [isSaving, setIsSaving] = useState(false);
 
   // Plan limits cap which memory sizes are selectable (Free is limited to 256MB).
@@ -1264,6 +1265,7 @@ function SettingsTab({
         build_command: buildCommand || undefined,
         auth_enabled: authEnabled,
         memory_mb: memoryMb,
+        port: typeof port === 'number' ? port : undefined,
       });
       // Refresh the list views (keyed with their own prefixes) and this server's detail.
       queryClient.invalidateQueries({ queryKey: ['servers-list'] });
@@ -1334,6 +1336,23 @@ function SettingsTab({
             className="bg-white"
           />
         </div>
+
+        {server.transport === 'sse' && (
+          <div className="space-y-2">
+            <Label htmlFor="port">{t('create.port')}</Label>
+            <p className="text-xs text-gray-500">{t('create.portHelp')}</p>
+            <Input
+              id="port"
+              type="number"
+              min={1}
+              max={65535}
+              value={port}
+              onChange={(e) => setPort(e.target.value === '' ? '' : Number(e.target.value))}
+              placeholder={String(server.runtime === 'python' ? 8000 : (server.runtime === 'go' || server.runtime === 'rust') ? 8080 : 3000)}
+              className="bg-white"
+            />
+          </div>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="entryCommand">{t('create.entryCommand')}</Label>

@@ -345,6 +345,8 @@
       "mcpPath": "MCPエンドポイントパス",
       "mcpPathHelp": "MCPサーバーがリッスンするHTTPパス（例: /mcp, /sse, /）",
       "mcpPathAutoStdio": "STDIOトランスポートの場合は /mcp に自動設定されます",
+      "port": "リッスンポート",
+      "portHelp": "HTTPサーバーがリッスンする内部ポート。空の場合はランタイム既定値（PORT環境変数から読み取り）を使用します。サーバーが別のポートを固定している場合のみ指定してください。",
       "entryCommand": "起動コマンド",
       "entryCommandHelp": "サーバーを起動するコマンド（例: python server.py, uv run mcp-server）。空の場合はプロジェクト構成から自動検出されます。",
       "buildCommand": "ビルドコマンド",

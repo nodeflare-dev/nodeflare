@@ -50,6 +50,8 @@ export interface McpServer {
   auth_enabled: boolean;
   /** User-selected machine memory in MB (256/512/1024/2048). null = auto. */
   memory_mb: number | null;
+  /** Internal listening port for Streamable HTTP (SSE) servers. null = runtime default. */
+  port: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -167,6 +169,8 @@ export interface CreateServerRequest {
   auth_enabled?: boolean;
   /** User-selected machine memory in MB (256/512/1024/2048). Omit for auto. */
   memory_mb?: number;
+  /** Internal listening port for Streamable HTTP (SSE) servers. Omit for runtime default. */
+  port?: number;
 }
 
 export interface UpdateServerRequest {
@@ -186,6 +190,8 @@ export interface UpdateServerRequest {
   auth_enabled?: boolean;
   /** User-selected machine memory in MB (256/512/1024/2048). */
   memory_mb?: number;
+  /** Internal listening port for Streamable HTTP (SSE) servers. Omit to leave unchanged. */
+  port?: number;
 }
 
 export interface CreateAccessTokenRequest {
