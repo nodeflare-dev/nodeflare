@@ -16,6 +16,7 @@ use auth::AuthCredential;
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::Instant;
+use uuid::Uuid;
 use tokio::net::TcpListener;
 use tower_http::{limit::RequestBodyLimitLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -23,10 +24,14 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod affinity;
 mod auth;
 mod cache;
+mod embedding;
+mod mcp_transform;
+mod meta_tools;
 mod rate_limit;
 mod redis_cache;
 
 use cache::{RequestCache, CoalesceResult};
+use mcp_db::{Tool, ToolRepository, UpsertTool};
 use redis_cache::{RedisCache, CachedServer};
 
 pub struct ProxyState {
@@ -41,6 +46,9 @@ pub struct ProxyState {
     pub redis_cache: RedisCache,
     /// Maximum request body size accepted from clients / read from upstreams.
     pub body_limit: usize,
+    /// Gemini embedding client for semantic search_tools. `None` disables semantic
+    /// search (falls back to lexical) when GEMINI_API_KEY is unset.
+    pub embedding: Option<embedding::EmbeddingClient>,
 }
 
 #[tokio::main]
@@ -141,6 +149,9 @@ async fn main() -> Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10 * 1024 * 1024); // 10MB default for proxy
 
+    // Optional Gemini embedding client for semantic search_tools (None = lexical only).
+    let embedding = embedding::EmbeddingClient::from_env(http_client.clone());
+
     let state = Arc::new(ProxyState {
         config: config.clone(),
         db: db_pool,
@@ -150,6 +161,7 @@ async fn main() -> Result<()> {
         request_cache,
         redis_cache,
         body_limit,
+        embedding,
     });
 
     let app = Router::new()
@@ -448,6 +460,10 @@ async fn proxy_handler(
         auth_enabled: server.auth_enabled,
         client_ip: &client_ip,
         host: &host,
+        server_id: server.id,
+        filter_by_scope: server.tool_list_filter_by_scope,
+        slim: server.tool_schema_slim,
+        search_mode: server.tool_search_mode,
     };
     let (response, mcp_info) =
         forward_request(&state, &target_url, request, credential.as_ref(), &fwd).await?;
@@ -646,13 +662,22 @@ fn is_sse_request(headers: &axum::http::HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-/// Per-request context needed to build sanitized upstream headers.
+/// Per-request context needed to build sanitized upstream headers and apply
+/// tools/list optimizations.
 struct ForwardContext<'a> {
     /// Whether NodeFlare validated the credential (so the client `Authorization`
     /// should be stripped) vs. the upstream doing its own auth (forward it).
     auth_enabled: bool,
     client_ip: &'a str,
     host: &'a str,
+    /// Server whose tools/list we may filter/slim and whose tool catalog we update.
+    server_id: Uuid,
+    /// Filter tools/list down to tools the credential may call.
+    filter_by_scope: bool,
+    /// Trim verbose tool schemas in tools/list.
+    slim: bool,
+    /// Collapse tools/list into search_tools + call_tool meta-tools.
+    search_mode: bool,
 }
 
 /// Hop-by-hop headers (RFC 7230 §6.1) — must not be forwarded by a proxy.
@@ -718,6 +743,38 @@ fn build_upstream_headers(inbound: &axum::http::HeaderMap, fwd: &ForwardContext)
     out.insert("x-forwarded-proto", HeaderValue::from_static("https"));
 
     out
+}
+
+/// Caller-identity component of the response cache key.
+///
+/// Cached list responses (tools/list, resources/list, prompts/list) can vary by who
+/// is asking: an upstream MCP server may filter tools by the caller's OAuth scope,
+/// and our own future per-credential filtering will too. The cache key must therefore
+/// include the caller's authorization context — otherwise one caller's cached (or
+/// in-flight coalesced) list could be served to another, an information leak.
+///
+/// - Authenticated by NodeFlare: we strip the client `Authorization` before
+///   forwarding, so the upstream is credential-agnostic today. We still key by our
+///   credential id so distinct credentials never share an entry — correct now, and
+///   still correct once we filter the list per credential.
+/// - Pass-through (upstream does its own auth): the client's credentials are
+///   forwarded, so the list can differ per caller. Key on the forwarded
+///   credential-bearing headers. (Localization headers and exotic custom auth headers
+///   are intentionally not included — a known long-tail limitation, bounded by TTL.)
+fn cache_identity(credential: Option<&AuthCredential>, inbound_headers: &axum::http::HeaderMap) -> Vec<u8> {
+    if let Some(cred) = credential {
+        return cred.id().as_bytes().to_vec();
+    }
+    let mut identity = Vec::new();
+    for name in ["authorization", "cookie"] {
+        if let Some(value) = inbound_headers.get(name) {
+            identity.extend_from_slice(name.as_bytes());
+            identity.push(b'=');
+            identity.extend_from_slice(value.as_bytes());
+            identity.push(b'\n');
+        }
+    }
+    identity
 }
 
 /// Canonical cache-key body: strip the volatile JSON-RPC `id` and `jsonrpc` fields so
@@ -786,7 +843,7 @@ async fn forward_request(
     let mut headers = build_upstream_headers(&inbound_headers, fwd);
 
     // Read body (limit comes from configuration, not a hard-coded constant).
-    let body_bytes = axum::body::to_bytes(request.into_body(), state.body_limit)
+    let mut body_bytes = axum::body::to_bytes(request.into_body(), state.body_limit)
         .await
         .map_err(|e| ProxyError::BadRequest(format!("Failed to read body: {}", e)))?;
 
@@ -802,7 +859,31 @@ async fn forward_request(
     }
 
     // Extract MCP request info (method + target + id)
-    let mcp_info = extract_mcp_request_info(&body_bytes);
+    let mut mcp_info = extract_mcp_request_info(&body_bytes);
+
+    // Search mode: handle the synthetic meta-tools before scope checks / forwarding.
+    // `target` is cloned so the match doesn't borrow `mcp_info` (we move/return it below).
+    let target = mcp_info.target.clone();
+    if fwd.search_mode && matches!(mcp_info.method, McpMethod::ToolsCall) {
+        match target.as_deref() {
+            // `search_tools` is served locally from the tool catalog — never forwarded.
+            Some(meta_tools::SEARCH_TOOLS) => {
+                let query = meta_tools::extract_search_query(&body_bytes);
+                let response =
+                    search_tools_response(state, credential, fwd, &query, mcp_info.id.as_ref()).await;
+                return Ok((response, mcp_info));
+            }
+            // `call_tool` unwraps into a real tools/call, then flows through the normal
+            // path below (scope-checked against the real tool name, then forwarded).
+            Some(meta_tools::CALL_TOOL) => {
+                if let Some(rewritten) = meta_tools::rewrite_call_tool_body(&body_bytes) {
+                    body_bytes = Bytes::from(rewritten);
+                    mcp_info = extract_mcp_request_info(&body_bytes);
+                }
+            }
+            _ => {}
+        }
+    }
 
     // Check scope permission before forwarding (only when we did the auth).
     if let Some(cred) = credential {
@@ -822,8 +903,14 @@ async fn forward_request(
         }
     }
 
-    // SSE requests: use streaming (no buffering, minimal latency)
-    if is_sse {
+    // tools/list gets token-reduction transforms (scope filter + optional slim) and
+    // populates the server's tool catalog, so it must be buffered rather than streamed.
+    let is_tools_list = matches!(mcp_info.method, McpMethod::ToolsList);
+
+    // SSE requests: stream directly (no buffering, minimal latency) — except tools/list,
+    // which we buffer below to transform it. tools/list is request/response, not a
+    // long-lived stream, so buffering it is safe.
+    if is_sse && !is_tools_list {
         tracing::info!("SSE request detected, using streaming forward to {}", target_url);
         let response = execute_streaming_request(state, target_url, method, &headers, body_bytes).await?;
         let session_id = response
@@ -831,6 +918,19 @@ async fn forward_request(
             .get("mcp-session-id")
             .and_then(|v| v.to_str().ok());
         affinity::capture_session(state, &affinity, session_id).await;
+        return Ok((response, mcp_info));
+    }
+
+    // tools/list over SSE: buffer (don't cache — the JSON-RPC id lives inside the SSE
+    // `data:` frame, which our id-agnostic cache can't rewrite), then catalog + transform.
+    if is_sse && is_tools_list {
+        let (response_body, status, response_headers) =
+            execute_upstream_request(state, target_url, method, &headers, body_bytes).await?;
+        if status >= 200 && status < 300 {
+            spawn_catalog_update(state, fwd.server_id, &response_headers, &response_body);
+        }
+        let body = transform_list_body(&mcp_info, &response_headers, response_body, credential, fwd);
+        let response = build_response(status, &response_headers, body)?;
         return Ok((response, mcp_info));
     }
 
@@ -845,16 +945,19 @@ async fn forward_request(
     // hits never leak another caller's JSON-RPC id — we re-inject the caller's id.
     if is_cacheable {
         let key_body = jsonrpc_cache_key_body(&body_bytes);
-        match state.request_cache.try_coalesce(target_url, &key_body).await {
+        let identity = cache_identity(credential, &inbound_headers);
+        match state.request_cache.try_coalesce(target_url, &identity, &key_body).await {
             CoalesceResult::Cached(cached) => {
                 tracing::debug!("Cache hit for {}", target_url);
                 let body = inject_jsonrpc_id(&cached.body, mcp_info.id.as_ref());
+                let body = transform_list_body(&mcp_info, &cached.headers, body, credential, fwd);
                 let response = build_response(cached.status, &cached.headers, body)?;
                 return Ok((response, mcp_info));
             }
             CoalesceResult::Coalesced(cached) => {
                 tracing::debug!("Request coalesced for {}", target_url);
                 let body = inject_jsonrpc_id(&cached.body, mcp_info.id.as_ref());
+                let body = transform_list_body(&mcp_info, &cached.headers, body, credential, fwd);
                 let response = build_response(cached.status, &cached.headers, body)?;
                 return Ok((response, mcp_info));
             }
@@ -863,15 +966,19 @@ async fn forward_request(
                 match execute_upstream_request(state, target_url, method, &headers, body_bytes).await {
                     Ok((response_body, status, response_headers)) => {
                         // Cache successful responses only, storing an id-stripped copy.
+                        // The cached body is the RAW upstream response; per-caller
+                        // transforms are applied on egress below, so the cache stays
+                        // reusable and never stores a filtered/slimmed copy.
                         if status >= 200 && status < 300 {
+                            spawn_catalog_update(state, fwd.server_id, &response_headers, &response_body);
                             let cacheable = strip_jsonrpc_id(&response_body);
                             state.request_cache.complete(handle, cacheable, status, response_headers.clone()).await;
                         } else {
                             state.request_cache.cancel(handle).await;
                         }
 
-                        // Serve this caller its own (correct-id) response unchanged.
-                        let response = build_response(status, &response_headers, response_body)?;
+                        let body = transform_list_body(&mcp_info, &response_headers, response_body, credential, fwd);
+                        let response = build_response(status, &response_headers, body)?;
                         return Ok((response, mcp_info));
                     }
                     Err(e) => {
@@ -895,6 +1002,194 @@ async fn forward_request(
 
     let response = build_response(status, &response_headers, response_body)?;
     Ok((response, mcp_info))
+}
+
+/// Content-type from a response header list, if present.
+fn response_content_type(headers: &[(String, String)]) -> Option<&str> {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v.as_str())
+}
+
+/// Apply tools/list token-reduction transforms to an outgoing response body.
+/// No-op for any method other than tools/list, and when neither transform is active.
+fn transform_list_body(
+    mcp_info: &McpRequestInfo,
+    headers: &[(String, String)],
+    body: Vec<u8>,
+    credential: Option<&AuthCredential>,
+    fwd: &ForwardContext<'_>,
+) -> Vec<u8> {
+    if !matches!(mcp_info.method, McpMethod::ToolsList) {
+        return body;
+    }
+    let content_type = response_content_type(headers);
+    // Search mode replaces the whole tool surface with the two meta-tools.
+    if fwd.search_mode {
+        return mcp_transform::replace_tools(&body, content_type, &meta_tools::definitions());
+    }
+    // Filtering only happens when we authenticated the caller (credential present);
+    // skip the work entirely when nothing would change.
+    let will_filter = fwd.filter_by_scope && credential.is_some();
+    if !will_filter && !fwd.slim {
+        return body;
+    }
+    mcp_transform::transform_tools_list(&body, content_type, credential, fwd.filter_by_scope, fwd.slim)
+}
+
+/// Serve a `search_tools` call locally from the server's tool catalog. Uses semantic
+/// (embedding) search when available, falling back to lexical search; honors scope
+/// filtering so a credential only discovers tools it is allowed to call.
+async fn search_tools_response(
+    state: &ProxyState,
+    credential: Option<&AuthCredential>,
+    fwd: &ForwardContext<'_>,
+    query: &str,
+    id: Option<&serde_json::Value>,
+) -> Response {
+    let matched = search_catalog(state, credential, fwd, query).await;
+    let refs: Vec<&Tool> = matched.iter().collect();
+    let body = meta_tools::search_result_json(&refs, id);
+    let headers = vec![("content-type".to_string(), "application/json".to_string())];
+    build_response(200, &headers, body)
+        .unwrap_or_else(|_| Response::builder().status(500).body(Body::empty()).unwrap())
+}
+
+/// Keep only tools the credential is allowed to call (when scope filtering is on).
+fn scope_filter_tools(
+    tools: Vec<Tool>,
+    credential: Option<&AuthCredential>,
+    fwd: &ForwardContext<'_>,
+) -> Vec<Tool> {
+    match (fwd.filter_by_scope, credential) {
+        (true, Some(cred)) => tools
+            .into_iter()
+            .filter(|t| cred.is_method_allowed(McpMethod::ToolsCall, Some(&t.name)))
+            .collect(),
+        _ => tools,
+    }
+}
+
+/// Find catalog tools matching `query`: semantic search first (if embeddings are
+/// configured and the query is non-empty), otherwise lexical. Always scope-filtered.
+async fn search_catalog(
+    state: &ProxyState,
+    credential: Option<&AuthCredential>,
+    fwd: &ForwardContext<'_>,
+    query: &str,
+) -> Vec<Tool> {
+    let limit = meta_tools::search_limit();
+
+    // Semantic path.
+    if let Some(client) = &state.embedding {
+        if !query.trim().is_empty() {
+            if let Some(qvec) = client.embed(query).await {
+                // Over-fetch so scope filtering still leaves enough results.
+                let fetch = (limit * 4) as i64;
+                match ToolRepository::search_by_embedding(&state.db, fwd.server_id, qvec, fetch).await {
+                    Ok(tools) if !tools.is_empty() => {
+                        let filtered = scope_filter_tools(tools, credential, fwd);
+                        if !filtered.is_empty() {
+                            return filtered.into_iter().take(limit).collect();
+                        }
+                    }
+                    Ok(_) => {} // no embedded tools yet — fall back to lexical
+                    Err(e) => tracing::warn!("semantic search failed for {}: {}", fwd.server_id, e),
+                }
+            }
+        }
+    }
+
+    // Lexical fallback.
+    let tools = ToolRepository::list_by_server(&state.db, fwd.server_id)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("search_tools: catalog read failed for {}: {}", fwd.server_id, e);
+            Vec::new()
+        });
+    let visible = scope_filter_tools(tools, credential, fwd);
+    meta_tools::rank_tools(&visible, query, limit)
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+/// Best-effort, non-blocking refresh of the server's tool catalog from an observed
+/// tools/list response. For servers whose list varies by caller (e.g. OAuth scope in
+/// pass-through mode) this records the most-recently observed set. An empty list is
+/// ignored so a low-scope caller can't wipe a populated catalog.
+fn spawn_catalog_update(
+    state: &ProxyState,
+    server_id: Uuid,
+    headers: &[(String, String)],
+    body: &[u8],
+) {
+    let content_type = response_content_type(headers);
+    let Some(tools) = mcp_transform::extract_tools(body, content_type) else {
+        return;
+    };
+    if tools.is_empty() {
+        return;
+    }
+    let db = state.db.clone();
+    let embedding = state.embedding.clone();
+    tokio::spawn(async move {
+        let upserts: Vec<UpsertTool> = tools
+            .into_iter()
+            .map(|t| UpsertTool {
+                server_id,
+                name: t.name,
+                description: t.description,
+                input_schema: t.input_schema,
+            })
+            .collect();
+        if let Err(e) = ToolRepository::sync_tools(&db, server_id, upserts).await {
+            tracing::warn!("tool catalog sync failed for server {}: {}", server_id, e);
+            return;
+        }
+        // Backfill embeddings for new/changed tools (sync nulls embeddings on change).
+        if let Some(client) = embedding {
+            backfill_embeddings(&db, &client, server_id).await;
+        }
+    });
+}
+
+/// Text used to embed a tool: name plus description (when present).
+fn tool_embed_text(tool: &Tool) -> String {
+    match &tool.description {
+        Some(desc) if !desc.is_empty() => format!("{}: {}", tool.name, desc),
+        _ => tool.name.clone(),
+    }
+}
+
+/// Embed and store vectors for a server's tools that don't have one yet. Best-effort.
+async fn backfill_embeddings(
+    db: &mcp_db::DbPool,
+    client: &embedding::EmbeddingClient,
+    server_id: Uuid,
+) {
+    let missing = match ToolRepository::list_missing_embeddings(db, server_id).await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("list_missing_embeddings failed for {}: {}", server_id, e);
+            return;
+        }
+    };
+    if missing.is_empty() {
+        return;
+    }
+    let texts: Vec<String> = missing.iter().map(tool_embed_text).collect();
+    let Some(vectors) = client.embed_batch(&texts).await else {
+        return;
+    };
+    for (tool, vector) in missing.iter().zip(vectors.into_iter()) {
+        if let Some(vector) = vector {
+            if let Err(e) = ToolRepository::set_embedding(db, tool.id, vector).await {
+                tracing::warn!("set_embedding failed for tool {}: {}", tool.id, e);
+            }
+        }
+    }
 }
 
 /// Build response from raw parts

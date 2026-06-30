@@ -1,6 +1,7 @@
 use crate::models::{CreateTool, Tool, UpdateTool, UpsertTool};
 use mcp_common::types::ToolPermissionLevel;
 use mcp_common::Result;
+use pgvector::Vector;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -226,6 +227,12 @@ impl ToolRepository {
             ON CONFLICT (server_id, name) DO UPDATE SET
                 description = EXCLUDED.description,
                 input_schema = EXCLUDED.input_schema,
+                -- Invalidate the stored embedding when the description changes so the
+                -- proxy re-embeds it; keep it otherwise to avoid needless re-embedding.
+                embedding = CASE
+                    WHEN tools.description IS DISTINCT FROM EXCLUDED.description THEN NULL
+                    ELSE tools.embedding
+                END,
                 updated_at = NOW()
             RETURNING id, server_id, name, description, input_schema, enabled,
                       permission_level, rate_limit_per_minute, created_at, updated_at
@@ -241,5 +248,63 @@ impl ToolRepository {
         tx.commit().await?;
 
         Ok(result)
+    }
+
+    /// Store a tool's embedding vector (search mode / semantic search).
+    pub async fn set_embedding(pool: &PgPool, tool_id: Uuid, embedding: Vec<f32>) -> Result<()> {
+        sqlx::query("UPDATE tools SET embedding = $2 WHERE id = $1")
+            .bind(tool_id)
+            .bind(Vector::from(embedding))
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Tools in a server that have no embedding yet (newly observed or description
+    /// changed). The proxy backfills these in the background.
+    pub async fn list_missing_embeddings(pool: &PgPool, server_id: Uuid) -> Result<Vec<Tool>> {
+        let tools = sqlx::query_as::<_, Tool>(
+            r#"
+            SELECT id, server_id, name, description, input_schema, enabled,
+                   permission_level, rate_limit_per_minute, created_at, updated_at
+            FROM tools
+            WHERE server_id = $1 AND embedding IS NULL
+            ORDER BY name
+            LIMIT $2
+            "#,
+        )
+        .bind(server_id)
+        .bind(Self::MAX_TOOLS_PER_SERVER)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(tools)
+    }
+
+    /// Semantic search: tools in a server ordered by cosine distance to `embedding`.
+    /// Only tools that already have an embedding participate.
+    pub async fn search_by_embedding(
+        pool: &PgPool,
+        server_id: Uuid,
+        embedding: Vec<f32>,
+        limit: i64,
+    ) -> Result<Vec<Tool>> {
+        let tools = sqlx::query_as::<_, Tool>(
+            r#"
+            SELECT id, server_id, name, description, input_schema, enabled,
+                   permission_level, rate_limit_per_minute, created_at, updated_at
+            FROM tools
+            WHERE server_id = $1 AND embedding IS NOT NULL
+            ORDER BY embedding <=> $2
+            LIMIT $3
+            "#,
+        )
+        .bind(server_id)
+        .bind(Vector::from(embedding))
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+
+        Ok(tools)
     }
 }

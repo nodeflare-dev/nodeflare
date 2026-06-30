@@ -40,6 +40,17 @@ pub struct McpServer {
     /// Fly.io app name this server deploys to. Decided ONCE at creation and persisted so
     /// it is never recomputed from a truncated UUID prefix (which collided across tenants).
     pub fly_app_name: String,
+    /// When true (default), the proxy filters a `tools/list` response down to the tools
+    /// the calling credential may actually call (NodeFlare-auth mode), cutting the
+    /// schema tokens an AI client loads upfront. Call-time scope checks apply regardless.
+    pub tool_list_filter_by_scope: bool,
+    /// When true (opt-in), the proxy trims verbose tool schemas in `tools/list` to
+    /// further reduce tokens. Off by default because it alters tool descriptions.
+    pub tool_schema_slim: bool,
+    /// When true (opt-in), the proxy collapses `tools/list` into two meta-tools
+    /// (`search_tools` + `call_tool`) so the upfront schema token cost stays roughly
+    /// constant regardless of how many tools the server exposes.
+    pub tool_search_mode: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -142,4 +153,7 @@ pub struct UpdateServer {
     pub auth_enabled: Option<bool>,
     pub memory_mb: Option<i32>,
     pub port: Option<i32>,
+    pub tool_list_filter_by_scope: Option<bool>,
+    pub tool_schema_slim: Option<bool>,
+    pub tool_search_mode: Option<bool>,
 }

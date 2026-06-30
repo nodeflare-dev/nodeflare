@@ -52,6 +52,12 @@ export interface McpServer {
   memory_mb: number | null;
   /** Internal listening port for Streamable HTTP (SSE) servers. null = runtime default. */
   port: number | null;
+  /** When true, the proxy filters tools/list down to tools the credential may call. */
+  tool_list_filter_by_scope: boolean;
+  /** When true, the proxy trims verbose tool schemas in tools/list to save tokens. */
+  tool_schema_slim: boolean;
+  /** When true, the proxy collapses tools/list into search_tools + call_tool meta-tools. */
+  tool_search_mode: boolean;
   created_at: string;
   updated_at: string;
 }

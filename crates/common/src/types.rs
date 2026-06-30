@@ -567,6 +567,12 @@ pub struct UpdateServerRequest {
     /// Internal listening port for Streamable HTTP (SSE) servers. None = leave unchanged.
     #[validate(range(min = 1, max = 65535))]
     pub port: Option<i32>,
+    /// Filter `tools/list` down to tools the calling credential may call. None = unchanged.
+    pub tool_list_filter_by_scope: Option<bool>,
+    /// Trim verbose tool schemas in `tools/list` to save tokens. None = unchanged.
+    pub tool_schema_slim: Option<bool>,
+    /// Collapse `tools/list` into search_tools + call_tool meta-tools. None = unchanged.
+    pub tool_search_mode: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -643,6 +649,12 @@ pub struct ServerResponse {
     pub memory_mb: Option<i32>,
     /// Internal listening port for Streamable HTTP (SSE) servers (None = runtime default).
     pub port: Option<i32>,
+    /// When true, the proxy filters `tools/list` to tools the credential may call.
+    pub tool_list_filter_by_scope: bool,
+    /// When true, the proxy trims verbose tool schemas in `tools/list`.
+    pub tool_schema_slim: bool,
+    /// When true, the proxy collapses `tools/list` into search_tools + call_tool.
+    pub tool_search_mode: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -90,10 +90,18 @@ impl RequestCache {
         }
     }
 
-    /// Generate cache key from server endpoint + request body
-    fn cache_key(endpoint: &str, body: &[u8]) -> u64 {
+    /// Generate cache key from server endpoint + caller identity + request body.
+    ///
+    /// `identity` captures the caller's authorization context (see `cache_identity`
+    /// in `main.rs`). It is part of the key because cached list responses
+    /// (tools/list, resources/list, prompts/list) can differ per caller — e.g. an
+    /// upstream MCP server that filters tools by the caller's OAuth scope. Omitting
+    /// it would let one caller's cached (or coalesced in-flight) list be served to
+    /// another, an information leak.
+    fn cache_key(endpoint: &str, identity: &[u8], body: &[u8]) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         endpoint.hash(&mut hasher);
+        identity.hash(&mut hasher);
         body.hash(&mut hasher);
         hasher.finish()
     }
@@ -111,8 +119,8 @@ impl RequestCache {
     }
 
     /// Try to get cached response (with single lock acquisition)
-    pub async fn get(&self, endpoint: &str, body: &[u8]) -> Option<CachedResponse> {
-        let key = Self::cache_key(endpoint, body);
+    pub async fn get(&self, endpoint: &str, identity: &[u8], body: &[u8]) -> Option<CachedResponse> {
+        let key = Self::cache_key(endpoint, identity, body);
         let shard = self.get_shard(key);
         let ttl = self.ttl;
 
@@ -139,8 +147,8 @@ impl RequestCache {
     /// - Cached: Found in cache
     /// - Coalesced: Another identical request was in-flight, we waited and got the result
     /// - Execute: Caller should execute the request (and then call `complete`)
-    pub async fn try_coalesce(&self, endpoint: &str, body: &[u8]) -> CoalesceResult {
-        let key = Self::cache_key(endpoint, body);
+    pub async fn try_coalesce(&self, endpoint: &str, identity: &[u8], body: &[u8]) -> CoalesceResult {
+        let key = Self::cache_key(endpoint, identity, body);
         let shard = self.get_shard(key);
         let ttl = self.ttl;
 
@@ -376,7 +384,7 @@ mod tests {
         let body = b"test body";
 
         // First request - should execute
-        let result = cache.try_coalesce(endpoint, body).await;
+        let result = cache.try_coalesce(endpoint, b"", body).await;
         let handle = match result {
             CoalesceResult::Execute(h) => h,
             _ => panic!("Expected Execute"),
@@ -388,7 +396,7 @@ mod tests {
             .await;
 
         // Second request - should be cached
-        let result = cache.try_coalesce(endpoint, body).await;
+        let result = cache.try_coalesce(endpoint, b"", body).await;
         match result {
             CoalesceResult::Cached(resp) => {
                 assert_eq!(resp.body.as_ref(), b"response");
@@ -406,7 +414,7 @@ mod tests {
 
         // Start first request
         let cache1 = cache.clone();
-        let result1 = cache1.try_coalesce(endpoint, body).await;
+        let result1 = cache1.try_coalesce(endpoint, b"", body).await;
         let handle = match result1 {
             CoalesceResult::Execute(h) => h,
             _ => panic!("Expected Execute for first request"),
@@ -417,7 +425,7 @@ mod tests {
         let endpoint2 = endpoint.to_string();
         let body2 = body.to_vec();
         let join_handle = tokio::spawn(async move {
-            cache2.try_coalesce(&endpoint2, &body2).await
+            cache2.try_coalesce(&endpoint2, b"", &body2).await
         });
 
         // Small delay to ensure second request is waiting
@@ -443,8 +451,8 @@ mod tests {
         let _cache = RequestCache::new(60, 100);
 
         // Test that different keys go to different shards
-        let key1 = RequestCache::cache_key("endpoint1", b"body1");
-        let key2 = RequestCache::cache_key("endpoint2", b"body2");
+        let key1 = RequestCache::cache_key("endpoint1", b"", b"body1");
+        let key2 = RequestCache::cache_key("endpoint2", b"", b"body2");
 
         // Keys should be distributed across shards
         let shard1 = RequestCache::shard_index(key1);
@@ -453,6 +461,73 @@ mod tests {
         // Both should be valid shard indices
         assert!(shard1 < NUM_SHARDS);
         assert!(shard2 < NUM_SHARDS);
+    }
+
+    #[tokio::test]
+    async fn test_identity_isolates_cached_entries() {
+        // A cached list response for one caller must NOT be served to a caller with a
+        // different authorization context (e.g. a different OAuth scope upstream).
+        let cache = RequestCache::new(60, 100);
+        let endpoint = "http://example.com/mcp";
+        let body = br#"{"method":"tools/list"}"#;
+
+        // Caller A executes and caches its (scope-specific) tool list.
+        let handle = match cache.try_coalesce(endpoint, b"caller-a", body).await {
+            CoalesceResult::Execute(h) => h,
+            _ => panic!("Expected Execute for caller A"),
+        };
+        cache
+            .complete(handle, b"tools-for-a".to_vec(), 200, vec![])
+            .await;
+
+        // Caller B (different identity) must execute its own request, not get A's.
+        match cache.try_coalesce(endpoint, b"caller-b", body).await {
+            CoalesceResult::Execute(_) => {} // correct: no cross-identity reuse
+            CoalesceResult::Cached(r) | CoalesceResult::Coalesced(r) => {
+                panic!("cache leaked across identities: got {:?}", r.body)
+            }
+        }
+
+        // Caller A repeating the same request still gets its own cached result.
+        match cache.try_coalesce(endpoint, b"caller-a", body).await {
+            CoalesceResult::Cached(r) => assert_eq!(r.body.as_ref(), b"tools-for-a"),
+            other => panic!("Expected cache hit for caller A, got {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_identity_isolates_in_flight_coalescing() {
+        // Coalescing must also be identity-scoped: a concurrent request from a
+        // different caller must not latch onto an in-flight request's result.
+        let cache = Arc::new(RequestCache::new(60, 100));
+        let endpoint = "http://example.com/mcp";
+        let body = br#"{"method":"tools/list"}"#;
+
+        // Caller A starts executing.
+        let handle = match cache.try_coalesce(endpoint, b"caller-a", body).await {
+            CoalesceResult::Execute(h) => h,
+            _ => panic!("Expected Execute for caller A"),
+        };
+
+        // Caller B, while A is in-flight, must NOT coalesce onto A.
+        let cache_b = cache.clone();
+        let endpoint_b = endpoint.to_string();
+        let body_b = body.to_vec();
+        let join_b = tokio::spawn(async move {
+            cache_b.try_coalesce(&endpoint_b, b"caller-b", &body_b).await
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        cache
+            .complete(handle, b"tools-for-a".to_vec(), 200, vec![])
+            .await;
+
+        match join_b.await.unwrap() {
+            CoalesceResult::Execute(_) => {} // correct: B runs independently
+            CoalesceResult::Coalesced(r) | CoalesceResult::Cached(r) => {
+                panic!("coalescing leaked across identities: got {:?}", r.body)
+            }
+        }
     }
 
     #[tokio::test]
@@ -465,7 +540,7 @@ mod tests {
             let endpoint = format!("endpoint{}", i * NUM_SHARDS); // Same shard
             let body = b"body";
 
-            let result = cache.try_coalesce(&endpoint, body).await;
+            let result = cache.try_coalesce(&endpoint, b"", body).await;
             if let CoalesceResult::Execute(h) = result {
                 cache.complete(h, b"response".to_vec(), 200, vec![]).await;
             }

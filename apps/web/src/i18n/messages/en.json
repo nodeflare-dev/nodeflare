@@ -291,6 +291,24 @@
       "on": "Enabled",
       "off": "Disabled"
     },
+    "toolFilter": {
+      "title": "Scope-Based Tool Filtering",
+      "description": "When enabled, tools/list only shows tools the calling credential is allowed to call, reducing the tokens an AI client loads upfront. Call-time permission checks always apply regardless.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
+    "toolSlim": {
+      "title": "Trim Tool Schemas",
+      "description": "When enabled, long tool descriptions in tools/list are truncated to save tokens. Off by default because some clients rely on full descriptions.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
+    "toolSearch": {
+      "title": "Search-First Tools",
+      "description": "When enabled, tools/list exposes only two meta-tools — search_tools and call_tool — so the AI client discovers tools on demand instead of loading every schema upfront. Keeps token cost roughly constant no matter how many tools the server has. Off by default because it changes the tool surface clients see.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
     "new": "New Server",
     "list": "Server List",
     "empty": "No servers yet",

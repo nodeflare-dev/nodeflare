@@ -72,6 +72,15 @@ pub struct CachedServer {
     /// When false, skip NodeFlare authentication layer
     #[serde(default = "default_auth_enabled")]
     pub auth_enabled: bool,
+    /// When true, filter `tools/list` to tools the credential may call.
+    #[serde(default = "default_auth_enabled")]
+    pub tool_list_filter_by_scope: bool,
+    /// When true, trim verbose tool schemas in `tools/list`.
+    #[serde(default)]
+    pub tool_schema_slim: bool,
+    /// When true, collapse `tools/list` into search_tools + call_tool meta-tools.
+    #[serde(default)]
+    pub tool_search_mode: bool,
 }
 
 fn default_auth_enabled() -> bool {
@@ -91,6 +100,9 @@ impl From<&McpServer> for CachedServer {
             rate_limit_per_minute: server.rate_limit_per_minute,
             mcp_path: server.mcp_path.clone(),
             auth_enabled: server.auth_enabled,
+            tool_list_filter_by_scope: server.tool_list_filter_by_scope,
+            tool_schema_slim: server.tool_schema_slim,
+            tool_search_mode: server.tool_search_mode,
         }
     }
 }
