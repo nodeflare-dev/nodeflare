@@ -21,7 +21,7 @@ static SECRET_KEY_REGEX: Lazy<Regex> = Lazy::new(|| {
 });
 
 /// Validate secret key name to prevent injection attacks
-fn validate_secret_key(key: &str) -> Result<(), (StatusCode, String)> {
+pub(crate) fn validate_secret_key(key: &str) -> Result<(), (StatusCode, String)> {
     if key.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "Secret key cannot be empty".to_string()));
     }

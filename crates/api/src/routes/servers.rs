@@ -6,7 +6,7 @@ use axum::{
 use chrono::Datelike;
 use mcp_billing::{validate_memory_choice, MemoryChoiceError, Plan as BillingPlan, MEMORY_LADDER_MB};
 use mcp_common::types::{CreateServerRequest, PaginationParams, ServerResponse, ServerMinimalResponse, ServerBasicResponse, ServerListResponse, UpdateServerRequest};
-use mcp_db::{CreateDeployment, CreateServer, CreateServerRegion, DeploymentRepository, ServerRegionRepository, ServerRepository, UpdateServer, WorkspaceRepository};
+use mcp_db::{CreateDeployment, CreateSecret, CreateServer, CreateServerRegion, DeploymentRepository, SecretRepository, ServerRegionRepository, ServerRepository, UpdateServer, WorkspaceRepository};
 use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -588,6 +588,40 @@ pub async fn create(
         tracing::error!("Failed to create primary region for server: {}", e);
         AppError::internal("Failed to create server region. Please try again.")
     })?;
+
+    // Persist any environment variables provided at creation time. This must happen
+    // BEFORE the auto-deploy build job is enqueued below, otherwise the first build
+    // would run without the secrets and the user would have to redeploy — exactly the
+    // workflow this feature removes. Each value is encrypted at rest, same as the
+    // dedicated secrets endpoint.
+    if let Some(env_vars) = &body.env_vars {
+        for env in env_vars {
+            // Reuse the secrets endpoint's key validation (injection-safe).
+            crate::routes::secrets::validate_secret_key(&env.key)
+                .map_err(|(_, msg)| AppError::bad_request("INVALID_SECRET_KEY", &msg))?;
+
+            let (encrypted_value, nonce) = state.crypto.encrypt_string(&env.value).map_err(|e| {
+                tracing::error!("Failed to encrypt env var '{}' for server {}: {}", env.key, server.id, e);
+                AppError::internal("Failed to encrypt environment variable")
+            })?;
+
+            SecretRepository::upsert(
+                &state.db,
+                CreateSecret {
+                    server_id: server.id,
+                    key: env.key.clone(),
+                    encrypted_value,
+                    nonce,
+                },
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to store env var '{}' for server {}: {}", env.key, server.id, e);
+                AppError::internal("Failed to store environment variable")
+            })?;
+        }
+        tracing::info!("Provisioned {} env var(s) for server {}", env_vars.len(), server.id);
+    }
 
     // NOTE: OAuth clients are intentionally NOT auto-created on server creation.
     // Users create an OAuth app explicitly from the OAuth apps page when they need

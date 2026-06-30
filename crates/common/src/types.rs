@@ -533,6 +533,12 @@ pub struct CreateServerRequest {
     /// (node 3000, python 8000, go/rust 8080). Ignored for stdio transport.
     #[validate(range(min = 1, max = 65535))]
     pub port: Option<i32>,
+    /// Environment variables (secrets) to provision at creation time, before the
+    /// initial auto-deploy. Persisted encrypted so the first build picks them up
+    /// without requiring a second deploy. Each entry's key/value are validated at
+    /// the API layer (same rules as the secrets endpoint).
+    #[validate(length(max = 100))]
+    pub env_vars: Option<Vec<SetSecretRequest>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]

@@ -171,6 +171,8 @@ export interface CreateServerRequest {
   memory_mb?: number;
   /** Internal listening port for Streamable HTTP (SSE) servers. Omit for runtime default. */
   port?: number;
+  /** Environment variables (secrets) to provision before the initial deploy. */
+  env_vars?: { key: string; value: string }[];
 }
 
 export interface UpdateServerRequest {
