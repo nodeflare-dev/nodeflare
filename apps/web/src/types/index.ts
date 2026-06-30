@@ -58,6 +58,8 @@ export interface McpServer {
   tool_schema_slim: boolean;
   /** When true, the proxy collapses tools/list into search_tools + call_tool meta-tools. */
   tool_search_mode: boolean;
+  /** When true, the proxy exposes run_code and executes AI-written code in a sandbox. */
+  tool_code_mode: boolean;
   created_at: string;
   updated_at: string;
 }

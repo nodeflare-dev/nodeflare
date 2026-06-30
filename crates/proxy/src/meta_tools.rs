@@ -24,40 +24,46 @@ const SEARCH_LIMIT: usize = 10;
 
 /// The two meta-tool definitions returned in place of the real `tools/list`.
 pub fn definitions() -> Vec<Value> {
-    vec![
-        json!({
-            "name": SEARCH_TOOLS,
-            "description": "Search this server's available tools by keyword. Returns matching tool names, descriptions, and input schemas. Use this to discover which tool to call, then invoke it with `call_tool`.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Keywords describing the tool or capability you need. Leave empty to list all tools."
-                    }
+    vec![search_tools_def(), call_tool_def()]
+}
+
+/// The `search_tools` discovery tool definition (shared with code mode).
+pub fn search_tools_def() -> Value {
+    json!({
+        "name": SEARCH_TOOLS,
+        "description": "Search this server's available tools by keyword. Returns matching tool names, descriptions, and input schemas. Use this to discover which tool to call, then invoke it with `call_tool`.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Keywords describing the tool or capability you need. Leave empty to list all tools."
+                }
+            },
+            "required": []
+        }
+    })
+}
+
+fn call_tool_def() -> Value {
+    json!({
+        "name": CALL_TOOL,
+        "description": "Invoke one of this server's tools by name. First use `search_tools` to find the tool's name and input schema.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "The exact name of the tool to call (as returned by search_tools)."
                 },
-                "required": []
-            }
-        }),
-        json!({
-            "name": CALL_TOOL,
-            "description": "Invoke one of this server's tools by name. First use `search_tools` to find the tool's name and input schema.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "The exact name of the tool to call (as returned by search_tools)."
-                    },
-                    "arguments": {
-                        "type": "object",
-                        "description": "Arguments object matching the tool's input schema."
-                    }
-                },
-                "required": ["name"]
-            }
-        }),
-    ]
+                "arguments": {
+                    "type": "object",
+                    "description": "Arguments object matching the tool's input schema."
+                }
+            },
+            "required": ["name"]
+        }
+    })
 }
 
 /// Rank `tools` against a lexical `query` and return up to `limit` matches.

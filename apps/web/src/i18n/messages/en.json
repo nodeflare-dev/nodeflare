@@ -309,6 +309,12 @@
       "on": "Enabled",
       "off": "Disabled"
     },
+    "toolCode": {
+      "title": "Code Execution",
+      "description": "When enabled, the AI writes JavaScript against your tools and the proxy runs it in a locked-down sandbox, returning only the final result. Cuts tokens for multi-step tasks by keeping intermediate data out of the model. Requires a configured code runner; otherwise this has no effect. Off by default.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
     "new": "New Server",
     "list": "Server List",
     "empty": "No servers yet",

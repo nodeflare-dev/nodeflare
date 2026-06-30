@@ -1242,6 +1242,7 @@ function SettingsTab({
   const [toolFilterByScope, setToolFilterByScope] = useState(server.tool_list_filter_by_scope ?? true);
   const [toolSchemaSlim, setToolSchemaSlim] = useState(server.tool_schema_slim ?? false);
   const [toolSearchMode, setToolSearchMode] = useState(server.tool_search_mode ?? false);
+  const [toolCodeMode, setToolCodeMode] = useState(server.tool_code_mode ?? false);
   const [isSaving, setIsSaving] = useState(false);
 
   // Plan limits cap which memory sizes are selectable (Free is limited to 256MB).
@@ -1272,6 +1273,7 @@ function SettingsTab({
         tool_list_filter_by_scope: toolFilterByScope,
         tool_schema_slim: toolSchemaSlim,
         tool_search_mode: toolSearchMode,
+        tool_code_mode: toolCodeMode,
       });
       // Refresh the list views (keyed with their own prefixes) and this server's detail.
       queryClient.invalidateQueries({ queryKey: ['servers-list'] });
@@ -1539,6 +1541,35 @@ function SettingsTab({
               }`}
             >
               {t('toolSearch.off')}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <Label className="block mb-2">{t('toolCode.title')}</Label>
+          <p className="text-xs text-gray-500 mb-2">{t('toolCode.description')}</p>
+          <div className="inline-flex p-0.5 bg-gray-200/60 rounded-[10px] border border-gray-200">
+            <button
+              type="button"
+              onClick={() => setToolCodeMode(true)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                toolCodeMode
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolCode.on')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setToolCodeMode(false)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                !toolCodeMode
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolCode.off')}
             </button>
           </div>
         </div>

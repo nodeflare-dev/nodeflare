@@ -573,6 +573,8 @@ pub struct UpdateServerRequest {
     pub tool_schema_slim: Option<bool>,
     /// Collapse `tools/list` into search_tools + call_tool meta-tools. None = unchanged.
     pub tool_search_mode: Option<bool>,
+    /// Expose run_code and execute AI-written code in a sandbox. None = unchanged.
+    pub tool_code_mode: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -655,6 +657,8 @@ pub struct ServerResponse {
     pub tool_schema_slim: bool,
     /// When true, the proxy collapses `tools/list` into search_tools + call_tool.
     pub tool_search_mode: bool,
+    /// When true, the proxy exposes run_code and executes code in a sandbox.
+    pub tool_code_mode: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

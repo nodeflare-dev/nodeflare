@@ -51,6 +51,10 @@ pub struct McpServer {
     /// (`search_tools` + `call_tool`) so the upfront schema token cost stays roughly
     /// constant regardless of how many tools the server exposes.
     pub tool_search_mode: bool,
+    /// When true (opt-in), the proxy exposes a `run_code` tool and executes AI-written
+    /// JavaScript against the tool catalog in a sandbox, returning only the final
+    /// result. Requires a configured code runner; otherwise treated as false.
+    pub tool_code_mode: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -156,4 +160,5 @@ pub struct UpdateServer {
     pub tool_list_filter_by_scope: Option<bool>,
     pub tool_schema_slim: Option<bool>,
     pub tool_search_mode: Option<bool>,
+    pub tool_code_mode: Option<bool>,
 }

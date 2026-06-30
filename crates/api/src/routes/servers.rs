@@ -94,6 +94,7 @@ pub async fn list_all(
                 tool_list_filter_by_scope: s.tool_list_filter_by_scope,
                 tool_schema_slim: s.tool_schema_slim,
                 tool_search_mode: s.tool_search_mode,
+                tool_code_mode: s.tool_code_mode,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             }
@@ -320,6 +321,7 @@ pub async fn list(
                 tool_list_filter_by_scope: s.tool_list_filter_by_scope,
                 tool_schema_slim: s.tool_schema_slim,
                 tool_search_mode: s.tool_search_mode,
+                tool_code_mode: s.tool_code_mode,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             }
@@ -752,6 +754,7 @@ pub async fn create(
         tool_list_filter_by_scope: server.tool_list_filter_by_scope,
         tool_schema_slim: server.tool_schema_slim,
         tool_search_mode: server.tool_search_mode,
+        tool_code_mode: server.tool_code_mode,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -803,6 +806,7 @@ pub async fn get(
         tool_list_filter_by_scope: server.tool_list_filter_by_scope,
         tool_schema_slim: server.tool_schema_slim,
         tool_search_mode: server.tool_search_mode,
+        tool_code_mode: server.tool_code_mode,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -892,6 +896,7 @@ pub async fn update(
             tool_list_filter_by_scope: body.tool_list_filter_by_scope,
             tool_schema_slim: body.tool_schema_slim,
             tool_search_mode: body.tool_search_mode,
+            tool_code_mode: body.tool_code_mode,
         },
     )
     .await?;
@@ -926,6 +931,7 @@ pub async fn update(
         tool_list_filter_by_scope: server.tool_list_filter_by_scope,
         tool_schema_slim: server.tool_schema_slim,
         tool_search_mode: server.tool_search_mode,
+        tool_code_mode: server.tool_code_mode,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -1230,6 +1236,7 @@ pub async fn stop(
         tool_list_filter_by_scope: server.tool_list_filter_by_scope,
         tool_schema_slim: server.tool_schema_slim,
         tool_search_mode: server.tool_search_mode,
+        tool_code_mode: server.tool_code_mode,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))

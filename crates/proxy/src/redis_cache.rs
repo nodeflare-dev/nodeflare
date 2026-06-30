@@ -81,6 +81,9 @@ pub struct CachedServer {
     /// When true, collapse `tools/list` into search_tools + call_tool meta-tools.
     #[serde(default)]
     pub tool_search_mode: bool,
+    /// When true, expose run_code and execute AI-written code in a sandbox.
+    #[serde(default)]
+    pub tool_code_mode: bool,
 }
 
 fn default_auth_enabled() -> bool {
@@ -103,6 +106,7 @@ impl From<&McpServer> for CachedServer {
             tool_list_filter_by_scope: server.tool_list_filter_by_scope,
             tool_schema_slim: server.tool_schema_slim,
             tool_search_mode: server.tool_search_mode,
+            tool_code_mode: server.tool_code_mode,
         }
     }
 }
@@ -135,6 +139,18 @@ impl From<&Workspace> for CachedWorkspace {
             current_period_end: ws.current_period_end,
         }
     }
+}
+
+/// Authorization context for a single code-execution run, keyed by an opaque token in
+/// Redis. The sandbox can present this token to the tool-call endpoint; the endpoint
+/// (not the sandbox wrapper) enforces what it grants.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeExecContext {
+    pub server_id: uuid::Uuid,
+    /// Upstream tools/call URL to forward to.
+    pub target_url: String,
+    /// Scope strings of the issuing credential (rebuilt into a ScopeChecker per call).
+    pub scopes: Vec<String>,
 }
 
 /// Redis cache for proxy hot path data
@@ -222,6 +238,30 @@ impl RedisCache {
     pub async fn invalidate_server(&self, slug: &str) {
         let cache_key = Self::server_cache_key(slug);
         let _: Result<(), _> = self.client.del(&cache_key).await;
+    }
+
+    /// Cache key for a code-execution token.
+    fn code_exec_key(token: &str) -> String {
+        format!("proxy:codeexec:{}", token)
+    }
+
+    /// Store a code-exec token context with a short TTL. The sandbox presents the token
+    /// to the tool-call endpoint, which looks the context up to enforce scope.
+    pub async fn set_code_exec(&self, token: &str, ctx: &CodeExecContext, ttl_secs: i64) {
+        let cache_key = Self::code_exec_key(token);
+        if let Ok(json) = serde_json::to_string(ctx) {
+            let _: Result<(), _> = self
+                .client
+                .set(&cache_key, json, Some(Expiration::EX(ttl_secs)), None, false)
+                .await;
+        }
+    }
+
+    /// Look up a code-exec token context.
+    pub async fn get_code_exec(&self, token: &str) -> Option<CodeExecContext> {
+        let cache_key = Self::code_exec_key(token);
+        let result: Option<String> = self.client.get(&cache_key).await.ok()?;
+        result.and_then(|json| serde_json::from_str(&json).ok())
     }
 
     /// Invalidate all cached data for a server (call when server is updated)
