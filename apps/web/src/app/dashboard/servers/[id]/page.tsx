@@ -1239,6 +1239,10 @@ function SettingsTab({
   const [authEnabled, setAuthEnabled] = useState(server.auth_enabled ?? true);
   const [memoryMb, setMemoryMb] = useState(server.memory_mb ?? DEFAULT_MEMORY_MB);
   const [port, setPort] = useState<number | ''>(server.port ?? '');
+  const [toolFilterByScope, setToolFilterByScope] = useState(server.tool_list_filter_by_scope ?? true);
+  const [toolSchemaSlim, setToolSchemaSlim] = useState(server.tool_schema_slim ?? false);
+  const [toolSearchMode, setToolSearchMode] = useState(server.tool_search_mode ?? false);
+  const [toolCodeMode, setToolCodeMode] = useState(server.tool_code_mode ?? false);
   const [isSaving, setIsSaving] = useState(false);
 
   // Plan limits cap which memory sizes are selectable (Free is limited to 256MB).
@@ -1266,6 +1270,10 @@ function SettingsTab({
         auth_enabled: authEnabled,
         memory_mb: memoryMb,
         port: typeof port === 'number' ? port : undefined,
+        tool_list_filter_by_scope: toolFilterByScope,
+        tool_schema_slim: toolSchemaSlim,
+        tool_search_mode: toolSearchMode,
+        tool_code_mode: toolCodeMode,
       });
       // Refresh the list views (keyed with their own prefixes) and this server's detail.
       queryClient.invalidateQueries({ queryKey: ['servers-list'] });
@@ -1446,6 +1454,122 @@ function SettingsTab({
               }`}
             >
               {t('authEnabled.off')}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <Label className="block mb-2">{t('toolFilter.title')}</Label>
+          <p className="text-xs text-gray-500 mb-2">{t('toolFilter.description')}</p>
+          <div className="inline-flex p-0.5 bg-gray-200/60 rounded-[10px] border border-gray-200">
+            <button
+              type="button"
+              onClick={() => setToolFilterByScope(true)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                toolFilterByScope
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolFilter.on')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setToolFilterByScope(false)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                !toolFilterByScope
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolFilter.off')}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <Label className="block mb-2">{t('toolSlim.title')}</Label>
+          <p className="text-xs text-gray-500 mb-2">{t('toolSlim.description')}</p>
+          <div className="inline-flex p-0.5 bg-gray-200/60 rounded-[10px] border border-gray-200">
+            <button
+              type="button"
+              onClick={() => setToolSchemaSlim(true)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                toolSchemaSlim
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolSlim.on')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setToolSchemaSlim(false)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                !toolSchemaSlim
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolSlim.off')}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <Label className="block mb-2">{t('toolSearch.title')}</Label>
+          <p className="text-xs text-gray-500 mb-2">{t('toolSearch.description')}</p>
+          <div className="inline-flex p-0.5 bg-gray-200/60 rounded-[10px] border border-gray-200">
+            <button
+              type="button"
+              onClick={() => setToolSearchMode(true)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                toolSearchMode
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolSearch.on')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setToolSearchMode(false)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                !toolSearchMode
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolSearch.off')}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <Label className="block mb-2">{t('toolCode.title')}</Label>
+          <p className="text-xs text-gray-500 mb-2">{t('toolCode.description')}</p>
+          <div className="inline-flex p-0.5 bg-gray-200/60 rounded-[10px] border border-gray-200">
+            <button
+              type="button"
+              onClick={() => setToolCodeMode(true)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                toolCodeMode
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolCode.on')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setToolCodeMode(false)}
+              className={`px-2.5 py-1 text-xs font-medium rounded-[10px] transition-all ${
+                !toolCodeMode
+                  ? 'bg-white text-gray-800 shadow border border-gray-100'
+                  : 'text-gray-400 hover:text-gray-600'
+              }`}
+            >
+              {t('toolCode.off')}
             </button>
           </div>
         </div>

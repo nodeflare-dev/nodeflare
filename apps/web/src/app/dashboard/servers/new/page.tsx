@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { Lock, Users, Globe, Server, Check, Link, Search, Folder, AlertCircle, Info, GitBranch, Terminal, AlertTriangle, XCircle, Plus, ArrowRight, MonitorPlay, Trash2, KeyRound } from 'lucide-react';
+import { Lock, Users, Globe, Server, Check, Link, Search, Folder, AlertCircle, Info, GitBranch, Terminal, AlertTriangle, XCircle, Plus, ArrowRight, MonitorPlay, Trash2, KeyRound, Sparkles, Copy } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getLinkedAccounts, getRepos, LinkedGitHubAccount } from '@/lib/github-api';
 import { CreateServerRequest, McpServer, Runtime, Visibility, GitHubRepo } from '@/types';
@@ -111,6 +111,24 @@ export default function NewServerPage() {
   const removeEnvVar = useCallback((index: number) => {
     setEnvVars((prev) => prev.filter((_, i) => i !== index));
   }, []);
+
+  // Copy a ready-made prompt the user can paste into an AI to figure out what to
+  // put in the form. Non-engineers cannot read the repo to know the runtime, entry
+  // command, required env vars, etc. — the AI inspects the repo and answers per field.
+  const [promptCopied, setPromptCopied] = useState(false);
+
+  const copyAiPrompt = useCallback(() => {
+    const repoUrl = formData.github_repo
+      ? `https://github.com/${formData.github_repo}`
+      : t('create.aiPromptRepoPlaceholder');
+    const prompt = t('create.aiPromptTemplate', {
+      repo: repoUrl,
+      branch: formData.github_branch || 'main',
+    });
+    navigator.clipboard.writeText(prompt);
+    setPromptCopied(true);
+    setTimeout(() => setPromptCopied(false), 2000);
+  }, [formData.github_repo, formData.github_branch, t]);
 
   const generateSlug = useCallback((name: string) => {
     return name
@@ -528,6 +546,35 @@ export default function NewServerPage() {
             {/* Advanced Settings (always visible) */}
             <div className="pt-2 text-sm font-medium text-gray-500">
               {t('create.advancedSettings')}
+            </div>
+
+            {/* Ask-an-AI helper: copies a prompt so non-engineers can have an AI
+                read the repo and tell them what to enter below. */}
+            <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-3">
+              <div className="flex items-start gap-3">
+                <Sparkles className="w-4 h-4 text-violet-500 mt-0.5 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800">{t('create.aiPromptTitle')}</p>
+                  <p className="text-xs text-gray-500 mt-1">{t('create.aiPromptHelp')}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={copyAiPrompt}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium transition-colors flex-shrink-0"
+                >
+                  {promptCopied ? (
+                    <>
+                      <Check className="w-4 h-4" />
+                      {t('create.aiPromptCopied')}
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      {t('create.aiPromptButton')}
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             <div className="space-y-4">

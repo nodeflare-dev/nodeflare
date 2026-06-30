@@ -91,6 +91,10 @@ pub async fn list_all(
                 auth_enabled: s.auth_enabled,
                 memory_mb: s.memory_mb,
                 port: s.port,
+                tool_list_filter_by_scope: s.tool_list_filter_by_scope,
+                tool_schema_slim: s.tool_schema_slim,
+                tool_search_mode: s.tool_search_mode,
+                tool_code_mode: s.tool_code_mode,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             }
@@ -314,6 +318,10 @@ pub async fn list(
                 auth_enabled: s.auth_enabled,
                 memory_mb: s.memory_mb,
                 port: s.port,
+                tool_list_filter_by_scope: s.tool_list_filter_by_scope,
+                tool_schema_slim: s.tool_schema_slim,
+                tool_search_mode: s.tool_search_mode,
+                tool_code_mode: s.tool_code_mode,
                 created_at: s.created_at,
                 updated_at: s.updated_at,
             }
@@ -743,6 +751,10 @@ pub async fn create(
         auth_enabled: server.auth_enabled,
         memory_mb: server.memory_mb,
         port: server.port,
+        tool_list_filter_by_scope: server.tool_list_filter_by_scope,
+        tool_schema_slim: server.tool_schema_slim,
+        tool_search_mode: server.tool_search_mode,
+        tool_code_mode: server.tool_code_mode,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -791,6 +803,10 @@ pub async fn get(
         auth_enabled: server.auth_enabled,
         memory_mb: server.memory_mb,
         port: server.port,
+        tool_list_filter_by_scope: server.tool_list_filter_by_scope,
+        tool_schema_slim: server.tool_schema_slim,
+        tool_search_mode: server.tool_search_mode,
+        tool_code_mode: server.tool_code_mode,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -877,6 +893,10 @@ pub async fn update(
             auth_enabled: body.auth_enabled,
             memory_mb: body.memory_mb,
             port: body.port,
+            tool_list_filter_by_scope: body.tool_list_filter_by_scope,
+            tool_schema_slim: body.tool_schema_slim,
+            tool_search_mode: body.tool_search_mode,
+            tool_code_mode: body.tool_code_mode,
         },
     )
     .await?;
@@ -908,6 +928,10 @@ pub async fn update(
         auth_enabled: server.auth_enabled,
         memory_mb: server.memory_mb,
         port: server.port,
+        tool_list_filter_by_scope: server.tool_list_filter_by_scope,
+        tool_schema_slim: server.tool_schema_slim,
+        tool_search_mode: server.tool_search_mode,
+        tool_code_mode: server.tool_code_mode,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))
@@ -1209,6 +1233,10 @@ pub async fn stop(
         auth_enabled: server.auth_enabled,
         memory_mb: server.memory_mb,
         port: server.port,
+        tool_list_filter_by_scope: server.tool_list_filter_by_scope,
+        tool_schema_slim: server.tool_schema_slim,
+        tool_search_mode: server.tool_search_mode,
+        tool_code_mode: server.tool_code_mode,
         created_at: server.created_at,
         updated_at: server.updated_at,
     }))

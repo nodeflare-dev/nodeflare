@@ -291,6 +291,30 @@
       "on": "Enabled",
       "off": "Disabled"
     },
+    "toolFilter": {
+      "title": "Scope-Based Tool Filtering",
+      "description": "When enabled, tools/list only shows tools the calling credential is allowed to call, reducing the tokens an AI client loads upfront. Call-time permission checks always apply regardless.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
+    "toolSlim": {
+      "title": "Trim Tool Schemas",
+      "description": "When enabled, long tool descriptions in tools/list are truncated to save tokens. Off by default because some clients rely on full descriptions.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
+    "toolSearch": {
+      "title": "Search-First Tools",
+      "description": "When enabled, tools/list exposes only two meta-tools — search_tools and call_tool — so the AI client discovers tools on demand instead of loading every schema upfront. Keeps token cost roughly constant no matter how many tools the server has. Off by default because it changes the tool surface clients see.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
+    "toolCode": {
+      "title": "Code Execution",
+      "description": "When enabled, the AI writes JavaScript against your tools and the proxy runs it in a locked-down sandbox, returning only the final result. Cuts tokens for multi-step tasks by keeping intermediate data out of the model. Requires a configured code runner; otherwise this has no effect. Off by default.",
+      "on": "Enabled",
+      "off": "Disabled"
+    },
     "new": "New Server",
     "list": "Server List",
     "empty": "No servers yet",
@@ -340,6 +364,12 @@
       "branch": "Branch",
       "branchPlaceholder": "main",
       "advancedSettings": "Advanced Settings",
+      "aiPromptTitle": "Not sure what to enter?",
+      "aiPromptHelp": "Copy a prompt and paste it into an AI (e.g. ChatGPT or Claude). Even if you cannot read code, an AI that reads the repository can tell you what to put in each field below.",
+      "aiPromptButton": "Copy prompt",
+      "aiPromptCopied": "Copied",
+      "aiPromptRepoPlaceholder": "(paste your GitHub repository URL here)",
+      "aiPromptTemplate": "I want to deploy the following MCP server to a hosting service called NodeFlare. I cannot read code myself, so please look at the repository and tell me what values to enter in the server creation form.\n\nRepository: {repo}\nBranch: {branch}\n\n[Output format] Output ONLY the template below, one item per line as \"Label: value\". Do not write any intro, explanation, notes, or code blocks — just the values. Give exactly one value per item, with no alternatives or caveats.\n\nRuntime: (exactly one of Node.js / Python / Go / Rust / Docker, using this spelling)\nTransport: (either Streamable HTTP or STDIO)\nRoot directory: (path of the subdirectory containing the server code, or \"none\" if it is at the repo root)\nBuild command: (the command needed to build, or \"none\")\nStart command: (the command that starts the server only)\nMCP path: (a path like /mcp)\nListening port: (port number only, or \"unknown\")\nEnvironment variables: (each as KEY=purpose, separated by \", \"; key names use uppercase letters and underscores only; or \"none\")\n\n[Rules]\n- Do NOT include build steps in the start command (e.g. \"npm run build && npm start\" is not allowed; use only the start part like \"npm start\").\n- Do NOT use npx in the start command.\n- For Runtime and Transport, use exactly the spellings listed above.\n- If something cannot be determined from the repository, write \"unknown\".",
       "envVars": "Environment Variables",
       "envVarsHelp": "Set environment variables (secrets) now so they're available on the first deploy. Values are stored encrypted. You can change them later from the server's Secrets tab.",
       "envVarsAdd": "Add variable",

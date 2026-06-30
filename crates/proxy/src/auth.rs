@@ -44,6 +44,15 @@ impl AuthCredential {
         self.scope_checker().is_allowed(method, target)
     }
 
+    /// Raw scope strings, persisted into a code-exec token so the sandbox tool-call
+    /// endpoint can re-check scope without holding the credential.
+    pub fn scopes(&self) -> Vec<String> {
+        match self {
+            AuthCredential::ApiKey(key) => key.scopes(),
+            AuthCredential::OAuthToken(token) => token.scopes(),
+        }
+    }
+
     pub fn id(&self) -> Uuid {
         match self {
             AuthCredential::ApiKey(key) => key.id,
