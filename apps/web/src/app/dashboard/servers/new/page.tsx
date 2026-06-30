@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useTranslations } from 'next-intl';
-import { Lock, Users, Globe, Server, Check, Link, Search, Folder, AlertCircle, Info, GitBranch, ChevronRight, Terminal, AlertTriangle, XCircle, Plus, ArrowRight, MonitorPlay } from 'lucide-react';
+import { Lock, Users, Globe, Server, Check, Link, Search, Folder, AlertCircle, Info, GitBranch, Terminal, AlertTriangle, XCircle, Plus, ArrowRight, MonitorPlay, Trash2, KeyRound } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getLinkedAccounts, getRepos, LinkedGitHubAccount } from '@/lib/github-api';
 import { CreateServerRequest, McpServer, Runtime, Visibility, GitHubRepo } from '@/types';
@@ -90,7 +90,27 @@ export default function NewServerPage() {
     auth_enabled: true,
     memory_mb: DEFAULT_MEMORY_MB,
   });
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  // Environment variables to provision at creation time (sent before the initial
+  // deploy so the first build already has them). Stored as a simple key/value list.
+  const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
+
+  const addEnvVar = useCallback(() => {
+    setEnvVars((prev) => [...prev, { key: '', value: '' }]);
+  }, []);
+
+  const updateEnvVar = useCallback((index: number, field: 'key' | 'value', value: string) => {
+    setEnvVars((prev) =>
+      prev.map((env, i) =>
+        i === index
+          ? { ...env, [field]: field === 'key' ? value.toUpperCase() : value }
+          : env
+      )
+    );
+  }, []);
+
+  const removeEnvVar = useCallback((index: number) => {
+    setEnvVars((prev) => prev.filter((_, i) => i !== index));
+  }, []);
 
   const generateSlug = useCallback((name: string) => {
     return name
@@ -154,10 +174,6 @@ export default function NewServerPage() {
         github_branch: parsed.branch || 'main',
         root_directory: parsed.subdir || '',
       }));
-      // Surface the auto-filled root directory so the user can see/confirm it.
-      if (parsed.subdir) {
-        setShowAdvanced(true);
-      }
     } else {
       setPublicRepoError('Invalid format. Use owner/repo or full GitHub URL');
       setFormData(prev => ({ ...prev, github_repo: '', name: '', slug: '' }));
@@ -194,7 +210,15 @@ export default function NewServerPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    createMutation.mutate(formData);
+    // Only send env vars that have a key; trim keys so stray whitespace doesn't
+    // trip the backend's key validation.
+    const env_vars = envVars
+      .map((env) => ({ key: env.key.trim(), value: env.value }))
+      .filter((env) => env.key.length > 0);
+    createMutation.mutate({
+      ...formData,
+      env_vars: env_vars.length > 0 ? env_vars : undefined,
+    });
   };
 
   const runtimes = useMemo(() => [
@@ -501,19 +525,12 @@ export default function NewServerPage() {
               </div>
             </div>
 
-            {/* Advanced Settings Toggle */}
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-700 transition-colors"
-            >
-              <ChevronRight className={`w-4 h-4 transition-transform ${showAdvanced ? 'rotate-90' : ''}`} />
+            {/* Advanced Settings (always visible) */}
+            <div className="pt-2 text-sm font-medium text-gray-500">
               {t('create.advancedSettings')}
-            </button>
+            </div>
 
-            {/* Advanced Settings */}
-            {showAdvanced && (
-              <div className="pl-6 border-l-2 border-gray-100 space-y-4">
+            <div className="space-y-4">
                 <div>
                   <Label htmlFor="root_directory" className="text-gray-700">{t('create.rootDirectory')}</Label>
                   <p className="text-xs text-gray-500 mt-1 mb-2">{t('create.rootDirectoryHelp')}</p>
@@ -647,8 +664,56 @@ export default function NewServerPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* Environment Variables */}
+                <div className="pt-4 border-t border-gray-100">
+                  <Label className="text-gray-700">{t('create.envVars')}</Label>
+                  <p className="text-xs text-gray-500 mt-1 mb-3">{t('create.envVarsHelp')}</p>
+
+                  {envVars.length > 0 && (
+                    <div className="space-y-2 mb-3">
+                      {envVars.map((env, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 bg-white w-1/3">
+                            <KeyRound className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                            <input
+                              type="text"
+                              value={env.key}
+                              onChange={(e) => updateEnvVar(index, 'key', e.target.value)}
+                              placeholder="API_KEY"
+                              className="flex-1 min-w-0 bg-transparent text-sm font-mono focus:outline-none"
+                            />
+                          </div>
+                          <input
+                            type="password"
+                            value={env.value}
+                            onChange={(e) => updateEnvVar(index, 'value', e.target.value)}
+                            placeholder={t('create.envVarsValuePlaceholder')}
+                            className="flex-1 min-w-0 px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeEnvVar(index)}
+                            className="p-2 text-gray-400 hover:text-red-600 transition-colors flex-shrink-0"
+                            title={tCommon('delete')}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={addEnvVar}
+                    className="flex items-center gap-2 text-sm text-violet-600 hover:text-violet-700 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    {t('create.envVarsAdd')}
+                  </button>
+                </div>
               </div>
-            )}
           </div>
         </section>
 
