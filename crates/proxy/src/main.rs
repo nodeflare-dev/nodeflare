@@ -187,9 +187,13 @@ async fn main() -> Result<()> {
         .layer(RequestBodyLimitLayer::new(body_limit))
         .with_state(state);
 
-    let addr = format!("{}:{}", config.server.host, config.server.proxy_port);
+    // Bind dual-stack (IPv6 + IPv4). Fly private networking (`.internal`) is IPv6-only,
+    // and the code runner's sandbox reaches the internal tool-call endpoint over it; the
+    // public fly-proxy path uses IPv4. `[::]` on Fly's Linux is dual-stack (bindv6only=0),
+    // so a single listener serves both. (config.server.host is still used for URLs.)
+    let addr = format!("[::]:{}", config.server.proxy_port);
     let listener = TcpListener::bind(&addr).await?;
-    tracing::info!("Proxy gateway listening on {}", addr);
+    tracing::info!("Proxy gateway listening on {} (dual-stack)", addr);
 
     axum::serve(
         listener,
