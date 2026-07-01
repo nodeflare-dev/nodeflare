@@ -50,7 +50,14 @@ const tools = new Proxy({}, {
         body: JSON.stringify({ tool: name, arguments: args ?? {} }),
       });
       if (!res.ok) throw new Error("tool '" + name + "' failed: HTTP " + res.status);
-      return await res.json();
+      const j = await res.json();
+      // The proxy returns tool-level errors as { __toolError } so we can raise them here
+      // as normal exceptions the user code can try/catch (instead of an opaque HTTP 502).
+      if (j && typeof j === "object" && "__toolError" in j) {
+        const m = typeof j.__toolError === "string" ? j.__toolError : JSON.stringify(j.__toolError);
+        throw new Error("tool '" + name + "' error: " + m);
+      }
+      return j;
     };
   },
 });

@@ -1235,7 +1235,16 @@ async fn code_exec_tools_call(
     // whether code mode passes the same args a direct client would.
     let args_preview = {
         let s = arguments.to_string();
-        if s.len() > 600 { format!("{}… ({}B)", &s[..600], s.len()) } else { s }
+        if s.len() > 600 {
+            // Truncate on a char boundary (args may contain multi-byte UTF-8).
+            let mut end = 600;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}… ({}B)", &s[..end], s.len())
+        } else {
+            s
+        }
     };
     tracing::info!(
         "code-exec[{}]: tool-call '{}' args={}",
@@ -1280,17 +1289,25 @@ async fn code_exec_tools_call(
     .await
     {
         Ok((resp_body, status, _)) => {
-            // Return the upstream JSON-RPC `result` to the sandbox, or surface an error.
             match serde_json::from_slice::<serde_json::Value>(&resp_body) {
                 Ok(v) => {
+                    // A JSON-RPC `error` is a TOOL-level failure, not an infrastructure
+                    // one. Return it to the sandbox as a catchable `__toolError` (HTTP
+                    // 200) so the model sees the real error and can try/catch it — NOT a
+                    // 502, which the sandbox throws opaquely and which looks like the
+                    // whole server is down.
                     if let Some(err) = v.get("error") {
-                        tracing::warn!(
-                            "code-exec[{}]: tool '{}' upstream JSON-RPC error: {}",
+                        tracing::info!(
+                            "code-exec[{}]: tool '{}' returned JSON-RPC error: {}",
                             server_id,
                             tool,
                             err
                         );
-                        return (StatusCode::BAD_GATEWAY, err.to_string()).into_response();
+                        return (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({ "__toolError": err })),
+                        )
+                            .into_response();
                     }
                     tracing::info!(
                         "code-exec[{}]: tool '{}' OK (upstream {}, {} bytes)",
@@ -1320,9 +1337,15 @@ async fn code_exec_tools_call(
                 }
             }
         }
+        // Transport failure to the upstream: also surface as a catchable error so the
+        // model gets a message instead of an opaque 502.
         Err(e) => {
-            tracing::warn!("code-exec[{}]: tool '{}' upstream error: {}", server_id, tool, e);
-            (StatusCode::BAD_GATEWAY, format!("upstream error: {e}")).into_response()
+            tracing::warn!("code-exec[{}]: tool '{}' upstream transport error: {}", server_id, tool, e);
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({ "__toolError": format!("upstream error: {e}") })),
+            )
+                .into_response()
         }
     }
 }
