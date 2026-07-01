@@ -1,7 +1,8 @@
 # Fly.io configuration for the sandboxed code runner (code-execution mode).
 # Deploy: fly deploy -c fly.code-runner.toml
 app = "mcp-code-runner"
-primary_region = "nrt"
+# Co-located with the proxy (iad) so run_code and the tool callbacks stay in-region.
+primary_region = "iad"
 
 [build]
   dockerfile = "services/code-runner/Dockerfile"
