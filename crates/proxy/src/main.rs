@@ -1231,7 +1231,18 @@ async fn code_exec_tools_call(
         .get("arguments")
         .cloned()
         .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-    tracing::info!("code-exec[{}]: tool-call '{}' requested by sandbox", server_id, tool);
+    // Log the exact arguments forwarded to the upstream tool (truncated), so we can see
+    // whether code mode passes the same args a direct client would.
+    let args_preview = {
+        let s = arguments.to_string();
+        if s.len() > 600 { format!("{}… ({}B)", &s[..600], s.len()) } else { s }
+    };
+    tracing::info!(
+        "code-exec[{}]: tool-call '{}' args={}",
+        server_id,
+        tool,
+        args_preview
+    );
 
     // 3. Re-check scope from the token (NOT the sandbox wrapper — this is the boundary).
     let checker = ScopeChecker::new(&ctx.scopes);
