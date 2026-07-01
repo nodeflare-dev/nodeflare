@@ -67,15 +67,20 @@ try {
 }
 
 async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?: string }> {
+  const t0 = Date.now();
   let host: string;
   try {
     host = new URL(req.tools_endpoint).host;
   } catch {
+    console.error(`[run] invalid tools_endpoint: ${req.tools_endpoint}`);
     return { error: "invalid tools_endpoint" };
   }
   const guid = crypto.randomUUID();
   const program = bootstrap(req, guid);
   const timeoutMs = (req.timeout_secs ?? 15) * 1000;
+  console.error(
+    `[run] start: code=${req.code.length}B allow-net=${host} timeout=${timeoutMs}ms max_calls=${req.max_tool_calls ?? 50}`,
+  );
 
   const command = new Deno.Command("deno", {
     args: ["run", "--no-prompt", `--allow-net=${host}`, "-"],
@@ -97,8 +102,15 @@ async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?
     } catch { /* already exited */ }
   }, timeoutMs);
 
-  const { stdout } = await child.output();
+  const { code: exitCode, stdout, stderr } = await child.output();
   clearTimeout(timer);
+  const ms = Date.now() - t0;
+
+  // Sandbox logs (user console.* + tool-call errors) land on stderr.
+  const errText = new TextDecoder().decode(stderr).trim();
+  if (errText) {
+    console.error(`[run] sandbox stderr:\n${errText}`);
+  }
 
   const text = new TextDecoder().decode(stdout);
   const okMarker = "\n" + guid + ":OK:\n";
@@ -107,6 +119,7 @@ async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?
   const okIdx = text.lastIndexOf(okMarker);
   if (okIdx !== -1) {
     const json = text.slice(okIdx + okMarker.length);
+    console.error(`[run] done OK in ${ms}ms (result=${json.length}B)`);
     try {
       return { output: JSON.parse(json) };
     } catch {
@@ -116,12 +129,14 @@ async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?
   const errIdx = text.lastIndexOf(errMarker);
   if (errIdx !== -1) {
     const json = text.slice(errIdx + errMarker.length);
+    console.error(`[run] done ERR in ${ms}ms: ${json}`);
     try {
       return { error: String(JSON.parse(json)) };
     } catch {
       return { error: json };
     }
   }
+  console.error(`[run] no result in ${ms}ms (exit=${exitCode}, timed out or crashed)`);
   return { error: "execution produced no result (timed out or crashed)" };
 }
 
@@ -131,13 +146,16 @@ Deno.serve({ port: SERVICE_PORT }, async (req) => {
     return new Response("ok");
   }
   if (req.method === "POST" && url.pathname === "/run") {
+    console.error("[run] request received");
     let body: RunRequest;
     try {
       body = await req.json();
     } catch {
+      console.error("[run] rejected: invalid JSON body");
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
     if (!body.code || !body.token || !body.tools_endpoint) {
+      console.error("[run] rejected: missing code/token/tools_endpoint");
       return Response.json({ error: "missing code/token/tools_endpoint" }, { status: 400 });
     }
     const result = await runSandboxed(body);
