@@ -54,13 +54,20 @@ const tools = new Proxy({}, {
     };
   },
 });
-const __emit = (marker, payload) =>
-  Deno.stdout.write(new TextEncoder().encode("\\n" + __GUID + marker + "\\n" + JSON.stringify(payload ?? null)));
+const __emit = async (marker, payload) => {
+  // Deno.stdout.write may write partially; loop until the whole frame is out so the
+  // result is never truncated (or dropped) before the process exits.
+  const bytes = new TextEncoder().encode("\\n" + __GUID + marker + "\\n" + JSON.stringify(payload ?? null));
+  let n = 0;
+  while (n < bytes.length) n += await Deno.stdout.write(bytes.subarray(n));
+};
 try {
   const __result = await (async () => { ${req.code}
   })();
+  console.error("[sandbox] result type=" + typeof __result);
   await __emit(":OK:", __result ?? null);
 } catch (e) {
+  console.error("[sandbox] threw: " + String((e && e.stack) || e));
   await __emit(":ERR:", String((e && e.message) || e));
 }
 `;
@@ -109,10 +116,15 @@ async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?
   // Sandbox logs (user console.* + tool-call errors) land on stderr.
   const errText = new TextDecoder().decode(stderr).trim();
   if (errText) {
-    console.error(`[run] sandbox stderr:\n${errText}`);
+    console.error(`[run] sandbox stderr:\n${errText.slice(0, 1200)}`);
   }
 
   const text = new TextDecoder().decode(stdout);
+  // Raw stdout dump (truncated) so we can see exactly what the sandbox emitted.
+  const rawPreview = text.length > 700
+    ? `${text.slice(0, 400)} …[total ${text.length}B]… ${text.slice(-200)}`
+    : text;
+  console.error(`[run] raw stdout (${text.length}B): ${JSON.stringify(rawPreview)}`);
   const okMarker = "\n" + guid + ":OK:\n";
   const errMarker = "\n" + guid + ":ERR:\n";
 
