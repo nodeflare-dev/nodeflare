@@ -1280,167 +1280,201 @@
     }
   },
   "docs": {
-    "title": "NodeFlare User Guide",
-    "subtitle": "Learn how to use each screen and feature of NodeFlare.",
-    "sidebar": "Screen Guide",
-    "common": {
-      "features": "Screen Components",
-      "actions": "Actions"
+    "title": "How NodeFlare works",
+    "subtitle": "The technical internals of the builder, the stdio→HTTP adapter, the proxy, and the sandboxed code runner — the pieces that make NodeFlare an MCP-native platform, not a generic container host.",
+    "sidebar": "On this page",
+    "nav": {
+      "overview": "Overview",
+      "architecture": "Architecture",
+      "builder": "Builder",
+      "adapter": "stdio → HTTP adapter",
+      "proxy": "Proxy",
+      "tokens": "Token optimization",
+      "code": "Code mode & runner",
+      "security": "Security model"
     },
     "contact": {
-      "prompt": "Can't find what you're looking for?",
-      "link": "Contact Us →"
+      "prompt": "Questions about the internals, or want something that is not covered here?",
+      "link": "Contact us →"
     },
-    "sections": {
-      "dashboard": {
-        "title": "Dashboard",
-        "description": "The first screen displayed after login. View server status and announcements at a glance.",
-        "features": [
-          "Server Cards: View each server's status (Running/Stopped/Error) at a glance",
-          "Quick Actions: Restart or deploy servers with one click",
-          "Usage: Current month's request count, server count, etc.",
-          "Announcements: Important announcements from NodeFlare"
+    "sec": {
+      "overview": {
+        "title": "Built for MCP, not generic containers",
+        "p": [
+          "NodeFlare is a hosting platform specialized for Model Context Protocol (MCP) servers. Every layer — how we build your repo, how we expose it, how we route requests — is aware of MCP semantics: the JSON-RPC methods (initialize, tools/list, tools/call, resources/*, prompts/*), MCP sessions, and per-tool / per-resource authorization.",
+          "A generic PaaS hands you a container and a port. NodeFlare instead takes an MCP server — even one that only speaks stdin/stdout — and turns it into an authenticated, scope-controlled, token-optimized Streamable HTTP endpoint that any MCP client can reach by URL.",
+          "This page documents the actual internals: the Rust builder, the injected Node stdio adapter, the Rust proxy, and the Deno sandbox that runs AI-written code. Nothing here is marketing abstraction — it maps directly to the code that runs your server."
         ],
-        "actions": [
-          "Click server card → Navigate to server details",
-          "\"New Server\" button → Navigate to server creation",
-          "Restart icon → Restart the server"
+        "badges": [
+          "JSON-RPC 2.0",
+          "Streamable HTTP + legacy SSE",
+          "OAuth 2.0 (RFC 8414 / 9728)",
+          "Scoped API keys",
+          "initialize verification",
+          "Deno / Firecracker sandbox"
         ]
       },
-      "servers": {
-        "title": "Server List",
-        "description": "Displays all created MCP servers in a list.",
-        "features": [
-          "Server Name: Click to navigate to details",
-          "Status Badge: Running (green) / Stopped (gray) / Error (red) / Building (yellow)",
-          "Last Deploy: Most recent deployment date/time",
-          "Action Buttons: Quick actions like restart, stop, deploy"
+      "architecture": {
+        "title": "Architecture at a glance",
+        "p": [
+          "Three components do the work. The Builder turns a GitHub repository into a running Fly.io machine. The stdio adapter (injected at build time) wraps a stdin/stdout MCP server and speaks HTTP on its behalf. The Proxy sits in front of every server and handles auth, scope, caching, session affinity, quota, and MCP-specific response transforms. A fourth, optional component — the Runner — executes AI-written code in a locked-down sandbox."
         ],
-        "actions": [
-          "\"New Server\" button → Navigate to server creation",
-          "Click server row → Navigate to server details",
-          "Workspace switcher → Switch between workspaces using the selector at the top"
+        "caption": "The proxy only ever talks HTTP to endpoint_url, so it is entirely language-agnostic. The stdio adapter is what bridges any-language MCP servers into that HTTP world."
+      },
+      "builder": {
+        "title": "The Builder: from a GitHub repo to a live MCP",
+        "p": [
+          "The builder is a Rust service that clones your repo at a specific commit, works out how to build and start it, generates a Dockerfile, builds the image remotely on Fly.io, deploys a machine, and then proves the MCP server actually answers."
+        ],
+        "steps": [
+          {
+            "t": "Fetch source",
+            "d": "Clone via the GitHub App tarball (or public git). root_directory is resolved with path-traversal protection; monorepos (npm/yarn/pnpm workspaces) are detected so dependencies hoisted at the repo root still resolve."
+          },
+          {
+            "t": "Detect runtime & commands",
+            "d": "node/python/go/rust/docker is inferred from manifests (package.json, pyproject.toml / requirements.txt / uv.lock, go.mod, Cargo.toml). Package manager (npm vs pnpm) and the start / build commands are auto-derived — scripts.start → main → bin for Node, [project.scripts] or server.py / main.py for Python, and so on. An explicit entry_command / build_command always wins."
+          },
+          {
+            "t": "Generate the Dockerfile",
+            "d": "A per-runtime Dockerfile is generated (or your own is validated and wrapped). For stdio servers, the stdio adapter is copied in and made the container entrypoint."
+          },
+          {
+            "t": "Inject secrets",
+            "d": "Environment variables are decrypted from the database and passed to Fly via stdin (never argv), and never appear in build logs — a redaction pass scrubs known token shapes."
+          },
+          {
+            "t": "Build & deploy",
+            "d": "The image is built remotely (flyctl deploy --remote-only) and a machine is started in the chosen region with the resolved memory and internal port."
+          },
+          {
+            "t": "Verify a real initialize",
+            "d": "A started machine is not proof of a working MCP. The builder POSTs a real MCP initialize (up to 8 attempts); if the child crash-loops behind the adapter, the deploy is failed and the actual server error is surfaced instead of a false success."
+          }
+        ],
+        "note": "That last step is the MCP-specific safety net: a wrong entry path leaves the adapter's HTTP up while your server is dead. NodeFlare probes initialize so that \"deployed\" means \"actually answering MCP\"."
+      },
+      "adapter": {
+        "title": "The stdio → Streamable HTTP adapter",
+        "p": [
+          "Most MCP servers are written to run locally over stdin/stdout — the way Claude Desktop launches them with npx. That is exactly what makes them hard to host. NodeFlare's answer is a small Node adapter that is injected into your image at build time and becomes the container entrypoint.",
+          "The adapter spawns your MCP server as a child process and bridges its stdio JSON-RPC to a Streamable HTTP endpoint (plus the legacy 2024-11-05 HTTP+SSE for older clients). It is completely language-agnostic: it does not care whether the child is Node, Python, Go, or Rust — it only speaks JSON-RPC over stdin/stdout."
+        ],
+        "features": [
+          {
+            "t": "Concurrent-safe id remapping",
+            "d": "Every incoming request is rewritten to a private JSON-RPC id before it reaches the shared child, and the caller's original id is restored on the way out — so many clients can share one process without collisions."
+          },
+          {
+            "t": "Warm auto-initialize",
+            "d": "The child is initialized on startup and the result cached, so deployment health is detectable and clients never hit \"already initialized\" errors."
+          },
+          {
+            "t": "Restart budget with backoff",
+            "d": "Crashes are retried with exponential backoff (1s → 30s) up to a budget; once spent, /health returns 503 so the platform surfaces the failure instead of hiding a crash-loop."
+          },
+          {
+            "t": "Session & path wiring",
+            "d": "Session ids are generated on initialize; the MCP path (default /mcp), host, and port are wired from build config so the proxy can reach it."
+          }
         ]
       },
-      "serverNew": {
-        "title": "Create Server",
-        "description": "Screen for creating a new MCP server. Select a GitHub repository to deploy.",
-        "features": [
-          "Server Name (Required): Display name for management",
-          "Slug (Required): Identifier used in URL (lowercase letters and hyphens only)",
-          "GitHub Repository (Required): Select the repository to deploy from",
-          "Branch (Optional): Branch to deploy (default: main)",
-          "Root Directory (Optional): For monorepos, the directory containing server code"
+      "proxy": {
+        "title": "The Proxy: auth, scope & MCP-aware routing",
+        "p": [
+          "Every request to a hosted server passes through the Rust proxy. It resolves the target server from the request subdomain, authenticates the caller, enforces authorization at the MCP-method level, and only then forwards to the upstream endpoint — applying MCP-aware transforms on the way back.",
+          "Because it understands the MCP protocol, the proxy can do things a plain reverse proxy cannot: authorize an individual tools/call by tool name, filter a tools/list per caller, and pin an MCP session to the machine that created it."
         ],
-        "actions": [
-          "Enter server name and slug",
-          "Click \"Select Repository\" to choose a GitHub repository",
-          "Change branch if needed",
-          "Click \"Create Server\" - build and deployment will start automatically"
+        "features": [
+          {
+            "t": "API keys & OAuth",
+            "d": "Bearer tokens are either mcp_* API keys (hashed, Redis-cached, with brute-force lockout) or OAuth access tokens validated against the DB. The proxy also serves the OAuth discovery metadata (RFC 8414 / 9728)."
+          },
+          {
+            "t": "Per-request scope enforcement",
+            "d": "Before forwarding, the caller's scopes are checked against the exact MCP method and target — e.g. tools:call:get_weather. A denial returns a JSON-RPC error and never reaches your server."
+          },
+          {
+            "t": "Session affinity to Fly machines",
+            "d": "initialize picks a machine and binds the returned Mcp-Session-Id to it in Redis; follow-up requests are pinned back to that machine, with stale bindings detected and healed."
+          },
+          {
+            "t": "Caller-scoped cache & coalescing",
+            "d": "Read-only list methods are cached and de-duplicated, but the cache key includes the caller's identity — so one credential's filtered list is never served to another."
+          },
+          {
+            "t": "Rate limit & monthly quota",
+            "d": "Per-minute limits and per-workspace monthly quotas are enforced with atomic Redis scripts; the quota is incremented before forwarding to avoid overshoot."
+          }
+        ],
+        "scopeTitle": "Scope grammar"
+      },
+      "tokens": {
+        "title": "MCP token-optimization features",
+        "p": [
+          "Large tool catalogs waste context: a server exposing 60 tools can spend thousands of tokens on tools/list before the model does anything. NodeFlare ships four per-server switches that reshape the MCP surface to save tokens — all applied in the proxy, transparently, without touching your server code."
+        ],
+        "items": [
+          {
+            "flag": "tool_list_filter_by_scope",
+            "t": "Show only callable tools",
+            "d": "tools/list is filtered to the tools the caller's credential is actually scoped to call. Narrower list, identical schemas."
+          },
+          {
+            "flag": "tool_schema_slim",
+            "t": "Trim bloated descriptions",
+            "d": "Tool descriptions longer than 500 characters are truncated (UTF-8 safe). Names and input schemas are untouched."
+          },
+          {
+            "flag": "tool_search_mode",
+            "t": "Replace the catalog with search",
+            "d": "tools/list collapses to two meta-tools — search_tools(query) and call_tool(name, args). The model searches the catalog (lexical, or semantic when embeddings are configured) and calls tools on demand, so the upfront token cost is roughly constant regardless of catalog size."
+          },
+          {
+            "flag": "tool_code_mode",
+            "t": "Let the model write code",
+            "d": "Exposes run_code + search_tools. Instead of many tool round-trips, the model writes JavaScript that calls tools.* — executed in a sandbox (see below). Ideal for filtering and joining across many calls."
+          }
         ]
       },
-      "serverDetail": {
-        "title": "Server Details",
-        "description": "Displays basic server information and current status. Includes Overview, Deployments, Test, Secrets, Webhooks, Metrics, and Settings tabs.",
-        "features": [
-          "Status: Current running state",
-          "Endpoint URL: URL for connecting from AI clients",
-          "Last Deploy: Most recent deployment date/time and commit hash",
-          "Available Tools: List of MCP tools provided by this server"
+      "code": {
+        "title": "Code mode & the sandboxed runner",
+        "p": [
+          "When tool_code_mode is on, the model can call run_code with a block of JavaScript. NodeFlare executes it in a dedicated Deno-on-Firecracker sandbox — a separate service from the proxy — with a network allow-list that permits exactly one destination: the proxy's tool-callback endpoint.",
+          "Inside the sandbox, tools.NAME(args) is injected as an async function. Each call POSTs back to the proxy carrying a per-execution bearer token; the runner never sees your credentials or the upstream URL."
         ],
-        "actions": [
-          "\"Copy\" button → Copy endpoint URL to clipboard",
-          "\"Deploy\" button → Execute manual deployment",
-          "\"Restart\" button → Restart the server",
-          "\"Stop\" button → Stop the server"
-        ]
+        "steps": [
+          {
+            "t": "Issue a short-lived token",
+            "d": "The proxy mints a one-off UUID token, stores the server id, target URL and scopes in Redis with a TTL of the run timeout + 10s, and dispatches the code to the runner."
+          },
+          {
+            "t": "Run in isolation",
+            "d": "A fresh Deno subprocess runs the code with no filesystem, no env, no subprocess — only outbound network to the callback endpoint. A wall-clock timeout SIGKILLs it."
+          },
+          {
+            "t": "Re-check scope on every tool call",
+            "d": "The callback endpoint looks up the token, confirms it is bound to this server, and re-validates the scope (e.g. tools:call:X) before forwarding a real tools/call upstream — the sandbox wrapper is never the security boundary."
+          },
+          {
+            "t": "Return the result",
+            "d": "Tool errors are wrapped so the model can catch and retry; the final value is serialized and returned as the run_code result."
+          }
+        ],
+        "limits": "Guardrails: a configurable wall-clock timeout (default 15s) and a max tool-call budget per run (default 50). If no runner is configured, code mode degrades gracefully and run_code reports itself unavailable."
       },
-      "logs": {
-        "title": "Request Logs",
-        "description": "View MCP server request logs in real-time.",
-        "features": [
-          "Server Select: Switch which server to display",
-          "Search: Filter by tool name or response",
-          "Live Mode: Toggle auto-refresh ON/OFF (2-second interval)",
-          "Timeline: Visualize request time distribution"
+      "security": {
+        "title": "Security model",
+        "p": [
+          "Authorization is enforced by the proxy and the callback endpoint — never by the client, the sandbox wrapper, or your server."
         ],
-        "actions": [
-          "Live button → Toggle auto-refresh ON/OFF",
-          "Refresh button → Manually refresh logs",
-          "Download button → Export logs as PDF"
-        ]
-      },
-      "accessTokens": {
-        "title": "Access Tokens",
-        "description": "Manage tokens used to access MCP servers. Tokens are displayed only once when created.",
-        "features": [
-          "Token Name: Identifier for management",
-          "Target Server: All servers or specific server",
-          "Scopes: Full Access / Tools / Resources / Prompts"
-        ],
-        "actions": [
-          "\"New Token\" button → Create new access token",
-          "Copy the displayed token and store it securely",
-          "Delete unused tokens"
-        ]
-      },
-      "oauth": {
-        "title": "OAuth Apps",
-        "description": "Manage OAuth clients for external applications to access MCP servers.",
-        "features": [
-          "App Name: Name of the OAuth client",
-          "Redirect URIs: Multiple redirect URIs can be registered",
-          "Client ID: Used in OAuth authorization requests",
-          "Client Secret: Used for authentication at token endpoint"
-        ],
-        "actions": [
-          "\"New Client\" button → Create new OAuth client",
-          "Register redirect URIs and allowed scopes",
-          "Client ID and Client Secret will be issued"
-        ]
-      },
-      "team": {
-        "title": "Team Members",
-        "description": "Invite members to your workspace to collaboratively manage servers.",
-        "features": [
-          "Member Count: Current member count and limit",
-          "Member List: Each member's name, email, and role",
-          "Roles: Owner / Admin / Member / Viewer"
-        ],
-        "actions": [
-          "\"Add Member\" button → Invite new member by email",
-          "Select role for the invited member",
-          "Change role via dropdown (except for owner)",
-          "\"Delete\" button → Remove member from workspace"
-        ]
-      },
-      "billing": {
-        "title": "Billing",
-        "description": "Manage subscriptions and view billing information.",
-        "features": [
-          "Current Plan: Plan name, price, and next billing date",
-          "Usage: Server count, request count, etc.",
-          "Payment Methods: Credit card registration and management",
-          "Billing History: List of past invoices"
-        ],
-        "actions": [
-          "\"Change Plan\" button → Upgrade or downgrade subscription",
-          "Register or change credit card",
-          "Download PDF receipts for each invoice"
-        ]
-      },
-      "settings": {
-        "title": "User Settings",
-        "description": "Manage account settings and notification preferences.",
-        "features": [
-          "Profile: Display name and email",
-          "Language: Japanese / English",
-          "Notifications: Deploy success/failure, server down, weekly report"
-        ],
-        "actions": [
-          "Change display name and email",
-          "Toggle notification settings ON/OFF",
-          "Sign out or delete account"
+        "points": [
+          "Scopes are checked per request against the exact MCP method and target; denials return a JSON-RPC error before reaching your server.",
+          "Cache and request-coalescing keys include caller identity, so scope- or subscription-filtered results never leak across credentials.",
+          "Code-execution tokens are single-purpose: bound to one server, short-lived, and re-checked for scope on every tool call.",
+          "The code sandbox has no filesystem, no env, and a one-destination network allow-list; it holds only a per-run token, not your credentials.",
+          "Secrets are encrypted at rest, injected to the builder via stdin, and redacted from build logs.",
+          "A deploy is only \"successful\" after a real MCP initialize round-trips — a crash-looping server fails the deploy instead of silently 500-ing."
         ]
       }
     }
