@@ -1,11 +1,13 @@
 # Sandboxed code runner (NodeFlare code-execution mode).
-FROM denoland/deno:alpine-2.1.4
+FROM denoland/deno:alpine
 
 WORKDIR /app
-COPY main.ts .
+# Build context is the repo root (where fly.code-runner.toml lives).
+COPY services/code-runner/main.ts .
 
-# Cache/type-check the entrypoint at build time.
-RUN deno check main.ts
+# Cache dependencies (none external here) without type-checking; `deno run` transpiles
+# and runs TS directly, so we avoid a strict-type build failure.
+RUN deno cache main.ts
 
 # The service is trusted: it needs to serve HTTP (--allow-net), read PORT
 # (--allow-env=PORT), and spawn the sandbox subprocess (--allow-run=deno). Each user

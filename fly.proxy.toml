@@ -11,6 +11,12 @@ primary_region = "nrt"
   PROXY_BASE_DOMAIN = "nodeflare.tech"
   API_URL = "https://nodeflare-api.fly.dev"
   RUST_LOG = "info"
+  # Semantic search (search_tools). GEMINI_API_KEY is a secret; these are plain config.
+  EMBEDDING_MODEL = "gemini-embedding-001"
+  EMBEDDING_DIMENSIONS = "768"
+  # Code-execution mode limits (PROXY_CODE_RUNNER_URL / callback base are secrets).
+  PROXY_CODE_TIMEOUT_SECS = "15"
+  PROXY_CODE_MAX_TOOL_CALLS = "50"
 
 [http_service]
   internal_port = 8081
