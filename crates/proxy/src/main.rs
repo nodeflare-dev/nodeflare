@@ -187,9 +187,13 @@ async fn main() -> Result<()> {
         .layer(RequestBodyLimitLayer::new(body_limit))
         .with_state(state);
 
-    let addr = format!("{}:{}", config.server.host, config.server.proxy_port);
+    // Bind dual-stack (IPv6 + IPv4). Fly private networking (`.internal`) is IPv6-only,
+    // and the code runner's sandbox reaches the internal tool-call endpoint over it; the
+    // public fly-proxy path uses IPv4. `[::]` on Fly's Linux is dual-stack (bindv6only=0),
+    // so a single listener serves both. (config.server.host is still used for URLs.)
+    let addr = format!("[::]:{}", config.server.proxy_port);
     let listener = TcpListener::bind(&addr).await?;
-    tracing::info!("Proxy gateway listening on {}", addr);
+    tracing::info!("Proxy gateway listening on {} (dual-stack)", addr);
 
     axum::serve(
         listener,
@@ -875,6 +879,14 @@ async fn forward_request(
 
     // Extract MCP request info (method + target + id)
     let mut mcp_info = extract_mcp_request_info(&body_bytes);
+    tracing::info!(
+        "mcp request: method={} target={} search_mode={} code_mode={} server={}",
+        mcp_info.method_str.as_deref().unwrap_or("-"),
+        mcp_info.target.as_deref().unwrap_or("-"),
+        fwd.search_mode,
+        fwd.code_mode,
+        fwd.server_id
+    );
 
     // Search/code mode: handle the synthetic meta-tools before scope checks / forwarding.
     // `target` is cloned so the match doesn't borrow `mcp_info` (we move/return it below).
@@ -1106,7 +1118,9 @@ async fn run_code_response(
             .unwrap_or_else(|_| Response::builder().status(500).body(Body::empty()).unwrap())
     };
 
+    tracing::info!("run_code: invoked for server={}", fwd.server_id);
     let Some(runner) = &state.code_runner else {
+        tracing::warn!("run_code: rejected — no code runner configured (PROXY_CODE_RUNNER_URL)");
         return respond(code_mode::error_json(
             "Code execution is enabled for this server but no code runner is configured.",
             id,
@@ -1114,12 +1128,14 @@ async fn run_code_response(
     };
     // Code mode relies on NodeFlare-authenticated scopes for the tool-call endpoint.
     let Some(cred) = credential else {
+        tracing::warn!("run_code: rejected — unauthenticated (code mode requires NodeFlare auth)");
         return respond(code_mode::error_json(
             "Code execution requires NodeFlare authentication.",
             id,
         ));
     };
     let Some(code) = code_mode::extract_code(body) else {
+        tracing::warn!("run_code: rejected — missing 'code' argument");
         return respond(code_mode::error_json("run_code requires a 'code' argument.", id));
     };
 
@@ -1133,17 +1149,37 @@ async fn run_code_response(
     // TTL covers the execution wall-clock plus a small buffer.
     let ttl = runner.timeout_secs() as i64 + 10;
     state.redis_cache.set_code_exec(&token, &ctx, ttl).await;
+    let endpoint = runner.tools_endpoint(fwd.server_id);
+    tracing::info!(
+        "run_code: dispatching to runner (code={} bytes, scopes={}, tools_endpoint={}, timeout={}s, max_tool_calls={})",
+        code.len(),
+        ctx.scopes.len(),
+        endpoint,
+        runner.timeout_secs(),
+        runner.max_tool_calls()
+    );
 
     let req = code_runner::RunRequest {
         code,
         token,
-        tools_endpoint: runner.tools_endpoint(fwd.server_id),
+        tools_endpoint: endpoint,
         timeout_secs: runner.timeout_secs(),
         max_tool_calls: runner.max_tool_calls(),
     };
+    let started = Instant::now();
     match runner.run(req).await {
-        Ok(output) => respond(code_mode::result_json(&output, id)),
-        Err(e) => respond(code_mode::error_json(&format!("code execution failed: {e}"), id)),
+        Ok(output) => {
+            tracing::info!(
+                "run_code: success ({} bytes) in {:?}",
+                output.len(),
+                started.elapsed()
+            );
+            respond(code_mode::result_json(&output, id))
+        }
+        Err(e) => {
+            tracing::warn!("run_code: FAILED in {:?}: {}", started.elapsed(), e);
+            respond(code_mode::error_json(&format!("code execution failed: {e}"), id))
+        }
     }
 }
 
@@ -1162,32 +1198,65 @@ async fn code_exec_tools_call(
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::trim);
     let Some(token) = token else {
+        tracing::warn!("code-exec[{}]: missing bearer token", server_id);
         return (StatusCode::UNAUTHORIZED, "missing bearer token").into_response();
     };
     let Some(ctx) = state.redis_cache.get_code_exec(token).await else {
+        tracing::warn!("code-exec[{}]: invalid or expired token", server_id);
         return (StatusCode::UNAUTHORIZED, "invalid or expired token").into_response();
     };
     // The token is bound to one server; reject a mismatched path.
     if ctx.server_id != server_id {
+        tracing::warn!(
+            "code-exec[{}]: token/server mismatch (token bound to {})",
+            server_id,
+            ctx.server_id
+        );
         return (StatusCode::FORBIDDEN, "token/server mismatch").into_response();
     }
 
     // 2. Parse { tool, arguments }.
     let parsed: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
-        Err(_) => return (StatusCode::BAD_REQUEST, "invalid JSON body").into_response(),
+        Err(_) => {
+            tracing::warn!("code-exec[{}]: invalid JSON body", server_id);
+            return (StatusCode::BAD_REQUEST, "invalid JSON body").into_response();
+        }
     };
     let Some(tool) = parsed.get("tool").and_then(|t| t.as_str()) else {
+        tracing::warn!("code-exec[{}]: missing 'tool' in body", server_id);
         return (StatusCode::BAD_REQUEST, "missing 'tool'").into_response();
     };
     let arguments = parsed
         .get("arguments")
         .cloned()
         .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    // Log the exact arguments forwarded to the upstream tool (truncated), so we can see
+    // whether code mode passes the same args a direct client would.
+    let args_preview = {
+        let s = arguments.to_string();
+        if s.len() > 600 {
+            // Truncate on a char boundary (args may contain multi-byte UTF-8).
+            let mut end = 600;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}… ({}B)", &s[..end], s.len())
+        } else {
+            s
+        }
+    };
+    tracing::info!(
+        "code-exec[{}]: tool-call '{}' args={}",
+        server_id,
+        tool,
+        args_preview
+    );
 
     // 3. Re-check scope from the token (NOT the sandbox wrapper — this is the boundary).
     let checker = ScopeChecker::new(&ctx.scopes);
     if !checker.is_allowed(McpMethod::ToolsCall, Some(tool)) {
+        tracing::warn!("code-exec[{}]: scope DENIED for tool '{}'", server_id, tool);
         return (
             StatusCode::FORBIDDEN,
             format!("scope does not permit tools:call:{}", tool),
@@ -1220,25 +1289,64 @@ async fn code_exec_tools_call(
     .await
     {
         Ok((resp_body, status, _)) => {
-            // Return the upstream JSON-RPC `result` to the sandbox, or surface an error.
             match serde_json::from_slice::<serde_json::Value>(&resp_body) {
                 Ok(v) => {
+                    // A JSON-RPC `error` is a TOOL-level failure, not an infrastructure
+                    // one. Return it to the sandbox as a catchable `__toolError` (HTTP
+                    // 200) so the model sees the real error and can try/catch it — NOT a
+                    // 502, which the sandbox throws opaquely and which looks like the
+                    // whole server is down.
                     if let Some(err) = v.get("error") {
-                        return (StatusCode::BAD_GATEWAY, err.to_string()).into_response();
+                        tracing::info!(
+                            "code-exec[{}]: tool '{}' returned JSON-RPC error: {}",
+                            server_id,
+                            tool,
+                            err
+                        );
+                        return (
+                            StatusCode::OK,
+                            axum::Json(serde_json::json!({ "__toolError": err })),
+                        )
+                            .into_response();
                     }
+                    tracing::info!(
+                        "code-exec[{}]: tool '{}' OK (upstream {}, {} bytes)",
+                        server_id,
+                        tool,
+                        status,
+                        resp_body.len()
+                    );
                     let result = v.get("result").cloned().unwrap_or(serde_json::Value::Null);
                     (StatusCode::OK, axum::Json(result)).into_response()
                 }
                 // Non-JSON (e.g. SSE) upstream: pass through raw with its status.
-                Err(_) => build_response(
-                    status,
-                    &[("content-type".to_string(), "application/json".to_string())],
-                    resp_body,
-                )
-                .unwrap_or_else(|_| (StatusCode::BAD_GATEWAY, "bad upstream").into_response()),
+                Err(_) => {
+                    tracing::info!(
+                        "code-exec[{}]: tool '{}' non-JSON upstream (status {}, {} bytes), passing through",
+                        server_id,
+                        tool,
+                        status,
+                        resp_body.len()
+                    );
+                    build_response(
+                        status,
+                        &[("content-type".to_string(), "application/json".to_string())],
+                        resp_body,
+                    )
+                    .unwrap_or_else(|_| (StatusCode::BAD_GATEWAY, "bad upstream").into_response())
+                }
             }
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, format!("upstream error: {e}")).into_response(),
+        // Transport failure to the upstream: also surface as a catchable error so the
+        // model gets a message instead of an opaque 502.
+        Err(e) => {
+            tracing::warn!("code-exec[{}]: tool '{}' upstream transport error: {}", server_id, tool, e);
+            (
+                StatusCode::OK,
+                axum::Json(serde_json::json!({ "__toolError": format!("upstream error: {e}") })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -1277,12 +1385,24 @@ async fn search_catalog(
                     Ok(tools) if !tools.is_empty() => {
                         let filtered = scope_filter_tools(tools, credential, fwd);
                         if !filtered.is_empty() {
-                            return filtered.into_iter().take(limit).collect();
+                            let out: Vec<Tool> = filtered.into_iter().take(limit).collect();
+                            tracing::info!(
+                                "search_tools[{}]: SEMANTIC hit — query='{}' -> {} tools",
+                                fwd.server_id,
+                                query,
+                                out.len()
+                            );
+                            return out;
                         }
+                        tracing::info!("search_tools[{}]: semantic matched but scope-filtered to 0, falling back", fwd.server_id);
                     }
-                    Ok(_) => {} // no embedded tools yet — fall back to lexical
-                    Err(e) => tracing::warn!("semantic search failed for {}: {}", fwd.server_id, e),
+                    Ok(_) => {
+                        tracing::info!("search_tools[{}]: no embeddings yet, falling back to lexical", fwd.server_id);
+                    }
+                    Err(e) => tracing::warn!("search_tools[{}]: semantic search failed: {}", fwd.server_id, e),
                 }
+            } else {
+                tracing::warn!("search_tools[{}]: query embedding failed, falling back to lexical", fwd.server_id);
             }
         }
     }
@@ -1295,10 +1415,17 @@ async fn search_catalog(
             Vec::new()
         });
     let visible = scope_filter_tools(tools, credential, fwd);
-    meta_tools::rank_tools(&visible, query, limit)
+    let out: Vec<Tool> = meta_tools::rank_tools(&visible, query, limit)
         .into_iter()
         .cloned()
-        .collect()
+        .collect();
+    tracing::info!(
+        "search_tools[{}]: LEXICAL — query='{}' -> {} tools",
+        fwd.server_id,
+        query,
+        out.len()
+    );
+    out
 }
 
 /// Best-effort, non-blocking refresh of the server's tool catalog from an observed
@@ -1330,10 +1457,12 @@ fn spawn_catalog_update(
                 input_schema: t.input_schema,
             })
             .collect();
+        let n = upserts.len();
         if let Err(e) = ToolRepository::sync_tools(&db, server_id, upserts).await {
             tracing::warn!("tool catalog sync failed for server {}: {}", server_id, e);
             return;
         }
+        tracing::info!("catalog[{}]: synced {} tools from tools/list", server_id, n);
         // Backfill embeddings for new/changed tools (sync nulls embeddings on change).
         if let Some(client) = embedding {
             backfill_embeddings(&db, &client, server_id).await;
@@ -1365,17 +1494,22 @@ async fn backfill_embeddings(
     if missing.is_empty() {
         return;
     }
+    tracing::info!("embeddings[{}]: backfilling {} tools", server_id, missing.len());
     let texts: Vec<String> = missing.iter().map(tool_embed_text).collect();
     let Some(vectors) = client.embed_batch(&texts).await else {
+        tracing::warn!("embeddings[{}]: batch embed failed (Gemini)", server_id);
         return;
     };
+    let mut stored = 0usize;
     for (tool, vector) in missing.iter().zip(vectors.into_iter()) {
         if let Some(vector) = vector {
-            if let Err(e) = ToolRepository::set_embedding(db, tool.id, vector).await {
-                tracing::warn!("set_embedding failed for tool {}: {}", tool.id, e);
+            match ToolRepository::set_embedding(db, tool.id, vector).await {
+                Ok(_) => stored += 1,
+                Err(e) => tracing::warn!("set_embedding failed for tool {}: {}", tool.id, e),
             }
         }
     }
+    tracing::info!("embeddings[{}]: stored {}/{}", server_id, stored, missing.len());
 }
 
 /// Build response from raw parts

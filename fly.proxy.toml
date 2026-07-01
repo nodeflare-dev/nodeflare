@@ -11,6 +11,16 @@ primary_region = "nrt"
   PROXY_BASE_DOMAIN = "nodeflare.tech"
   API_URL = "https://nodeflare-api.fly.dev"
   RUST_LOG = "info"
+  # Semantic search (search_tools). GEMINI_API_KEY is a secret; these are plain config.
+  EMBEDDING_MODEL = "gemini-embedding-001"
+  EMBEDDING_DIMENSIONS = "768"
+  # Code-execution mode limits (PROXY_CODE_RUNNER_URL / callback base are secrets).
+  # 60s sandbox wall-clock so heavy discovery tools (many upstream API calls) can finish.
+  PROXY_CODE_TIMEOUT_SECS = "60"
+  PROXY_CODE_MAX_TOOL_CALLS = "50"
+  # Must exceed the sandbox wall-clock: this bounds both proxy->runner (the whole
+  # run_code) and proxy->upstream (each heavy tool call). 30s (default) cut them short.
+  PROXY_UPSTREAM_TIMEOUT_SECS = "90"
 
 [http_service]
   internal_port = 8081

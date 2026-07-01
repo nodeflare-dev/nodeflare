@@ -50,32 +50,51 @@ const tools = new Proxy({}, {
         body: JSON.stringify({ tool: name, arguments: args ?? {} }),
       });
       if (!res.ok) throw new Error("tool '" + name + "' failed: HTTP " + res.status);
-      return await res.json();
+      const j = await res.json();
+      // The proxy returns tool-level errors as { __toolError } so we can raise them here
+      // as normal exceptions the user code can try/catch (instead of an opaque HTTP 502).
+      if (j && typeof j === "object" && "__toolError" in j) {
+        const m = typeof j.__toolError === "string" ? j.__toolError : JSON.stringify(j.__toolError);
+        throw new Error("tool '" + name + "' error: " + m);
+      }
+      return j;
     };
   },
 });
-const __emit = (marker, payload) =>
-  Deno.stdout.write(new TextEncoder().encode("\\n" + __GUID + marker + "\\n" + JSON.stringify(payload ?? null)));
+const __emit = async (marker, payload) => {
+  // Deno.stdout.write may write partially; loop until the whole frame is out so the
+  // result is never truncated (or dropped) before the process exits.
+  const bytes = new TextEncoder().encode("\\n" + __GUID + marker + "\\n" + JSON.stringify(payload ?? null));
+  let n = 0;
+  while (n < bytes.length) n += await Deno.stdout.write(bytes.subarray(n));
+};
 try {
   const __result = await (async () => { ${req.code}
   })();
+  console.error("[sandbox] result type=" + typeof __result);
   await __emit(":OK:", __result ?? null);
 } catch (e) {
+  console.error("[sandbox] threw: " + String((e && e.stack) || e));
   await __emit(":ERR:", String((e && e.message) || e));
 }
 `;
 }
 
 async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?: string }> {
+  const t0 = Date.now();
   let host: string;
   try {
     host = new URL(req.tools_endpoint).host;
   } catch {
+    console.error(`[run] invalid tools_endpoint: ${req.tools_endpoint}`);
     return { error: "invalid tools_endpoint" };
   }
   const guid = crypto.randomUUID();
   const program = bootstrap(req, guid);
   const timeoutMs = (req.timeout_secs ?? 15) * 1000;
+  console.error(
+    `[run] start: code=${req.code.length}B allow-net=${host} timeout=${timeoutMs}ms max_calls=${req.max_tool_calls ?? 50}`,
+  );
 
   const command = new Deno.Command("deno", {
     args: ["run", "--no-prompt", `--allow-net=${host}`, "-"],
@@ -97,16 +116,29 @@ async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?
     } catch { /* already exited */ }
   }, timeoutMs);
 
-  const { stdout } = await child.output();
+  const { code: exitCode, stdout, stderr } = await child.output();
   clearTimeout(timer);
+  const ms = Date.now() - t0;
+
+  // Sandbox logs (user console.* + tool-call errors) land on stderr.
+  const errText = new TextDecoder().decode(stderr).trim();
+  if (errText) {
+    console.error(`[run] sandbox stderr:\n${errText.slice(0, 1200)}`);
+  }
 
   const text = new TextDecoder().decode(stdout);
+  // Raw stdout dump (truncated) so we can see exactly what the sandbox emitted.
+  const rawPreview = text.length > 700
+    ? `${text.slice(0, 400)} …[total ${text.length}B]… ${text.slice(-200)}`
+    : text;
+  console.error(`[run] raw stdout (${text.length}B): ${JSON.stringify(rawPreview)}`);
   const okMarker = "\n" + guid + ":OK:\n";
   const errMarker = "\n" + guid + ":ERR:\n";
 
   const okIdx = text.lastIndexOf(okMarker);
   if (okIdx !== -1) {
     const json = text.slice(okIdx + okMarker.length);
+    console.error(`[run] done OK in ${ms}ms (result=${json.length}B)`);
     try {
       return { output: JSON.parse(json) };
     } catch {
@@ -116,28 +148,35 @@ async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?
   const errIdx = text.lastIndexOf(errMarker);
   if (errIdx !== -1) {
     const json = text.slice(errIdx + errMarker.length);
+    console.error(`[run] done ERR in ${ms}ms: ${json}`);
     try {
       return { error: String(JSON.parse(json)) };
     } catch {
       return { error: json };
     }
   }
+  console.error(`[run] no result in ${ms}ms (exit=${exitCode}, timed out or crashed)`);
   return { error: "execution produced no result (timed out or crashed)" };
 }
 
-Deno.serve({ port: SERVICE_PORT }, async (req) => {
+// Bind IPv6 (dual-stack): Fly private networking (`.internal`) is IPv6-only, so the
+// proxy reaches us over 6PN. `0.0.0.0` (IPv4) would refuse those connections.
+Deno.serve({ port: SERVICE_PORT, hostname: "::" }, async (req) => {
   const url = new URL(req.url);
   if (req.method === "GET" && url.pathname === "/health") {
     return new Response("ok");
   }
   if (req.method === "POST" && url.pathname === "/run") {
+    console.error("[run] request received");
     let body: RunRequest;
     try {
       body = await req.json();
     } catch {
+      console.error("[run] rejected: invalid JSON body");
       return Response.json({ error: "invalid JSON body" }, { status: 400 });
     }
     if (!body.code || !body.token || !body.tools_endpoint) {
+      console.error("[run] rejected: missing code/token/tools_endpoint");
       return Response.json({ error: "missing code/token/tools_endpoint" }, { status: 400 });
     }
     const result = await runSandboxed(body);
