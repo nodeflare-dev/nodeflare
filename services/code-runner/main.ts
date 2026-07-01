@@ -140,7 +140,9 @@ async function runSandboxed(req: RunRequest): Promise<{ output?: unknown; error?
   return { error: "execution produced no result (timed out or crashed)" };
 }
 
-Deno.serve({ port: SERVICE_PORT }, async (req) => {
+// Bind IPv6 (dual-stack): Fly private networking (`.internal`) is IPv6-only, so the
+// proxy reaches us over 6PN. `0.0.0.0` (IPv4) would refuse those connections.
+Deno.serve({ port: SERVICE_PORT, hostname: "::" }, async (req) => {
   const url = new URL(req.url);
   if (req.method === "GET" && url.pathname === "/health") {
     return new Response("ok");

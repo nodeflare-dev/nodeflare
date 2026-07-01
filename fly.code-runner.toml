@@ -12,10 +12,12 @@ primary_region = "nrt"
 [http_service]
   internal_port = 8080
   force_https = true
-  # Scale to zero when idle; Fly wakes a machine on the next request.
-  auto_stop_machines = true
+  # Always keep one machine running: the proxy reaches the runner over `.internal`
+  # (direct, no fly-proxy), which does NOT auto-start a stopped machine. Scale-to-zero
+  # can be restored later by switching the proxy to a `.flycast` address.
+  auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [http_service.concurrency]
     type = "requests"
